@@ -196,9 +196,12 @@ static int open_decoder(struct tb_decoder *d) {
     if (!d->ctx) return -1;
 
     if (hw_pix_fmt != AV_PIX_FMT_NONE) {
-        if (av_hwdevice_ctx_create(&d->hw_dev, type, NULL, NULL, 0) < 0) {
-            fprintf(stderr, "[dec] av_hwdevice_ctx_create failed\n");
-        } else {
+        if (!d->hw_dev) {
+            if (av_hwdevice_ctx_create(&d->hw_dev, type, NULL, NULL, 0) < 0) {
+                fprintf(stderr, "[dec] av_hwdevice_ctx_create failed\n");
+            }
+        }
+        if (d->hw_dev) {
             d->ctx->hw_device_ctx = av_buffer_ref(d->hw_dev);
             d->ctx->get_format    = get_hw_format;
         }
