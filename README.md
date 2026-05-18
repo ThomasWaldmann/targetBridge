@@ -4,21 +4,21 @@
 
 [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-pink?logo=github)](https://github.com/sponsors/swellweb)
 
-Use an Intel iMac as an external display for an Apple Silicon Mac — free, no dongle, via Thunderbolt Bridge.
+Use an iMac as an external display for another Mac by just using a Thunderbolt cable (TargetBridge uses an IP connection over the Thunderbolt Bridge).
 
 If TargetBridge is useful to you, a ⭐ on GitHub helps others find it.
 
-Apple dropped Target Display Mode in 2014 with the 5K iMac — and it never came back. TargetBridge brings it back via software, streaming your screen to the iMac at up to 5K over a direct Thunderbolt cable.
+Apple dropped Target Display Mode in 2014 with the 5K iMac — and it never came back. TargetBridge brings it back via software, streaming your screen to the iMac at up to 5K.
 
 ## Screenshots
 
-**Sender (Apple Silicon Mac) — waiting for connection:**
+**Sender (MacBook) — waiting for connection:**
 ![TargetBridge Sender](screenshots/sender-idle.png)
 
 **Sender — active stream (5K, HEVC):**
 ![TargetBridge Sender active](screenshots/sender-active.png)
 
-**Receiver (Intel iMac) — waiting for sender:**
+**Receiver (iMac) — waiting for sender:**
 ![TargetBridge Receiver](screenshots/receiver.png)
 
 **iMac connected at native resolution via Thunderbolt:**
@@ -35,11 +35,11 @@ Unzip and double-click. On first launch, grant Screen Recording permission to th
 
 > **Pre-built receiver crashing?** Make sure you downloaded v1.2.0 or later — older builds required Homebrew or macOS 14. Re-download from the [latest release](https://github.com/swellweb/targetBridge/releases/latest).
 
-## Requirements
+## Hardware Requirements
 
-- Sender: Apple Silicon Mac (M1 or later), macOS 14 Sonoma or later, TB3/4/5
-- Receiver: Intel iMac 2017 or later, macOS 13 Ventura or later, TB3/4/5
-- Thunderbolt 3/4/5 cable (backwards compatible)
+- Sender: any Mac with TB3/4/5 (late 2016 or later)
+- Receiver: any iMac with TB3/4/5 (2017 or later)
+- Thunderbolt 3/4/5 cable (cables are backwards compatible)
 
 ## Stream profiles
 
