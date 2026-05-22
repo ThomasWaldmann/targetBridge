@@ -1201,14 +1201,20 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
                 return false
             }
 
+            var completed = false
+            defer {
+                if !completed {
+                    CGCancelDisplayConfiguration(cfg)
+                }
+            }
+
             let result = CGConfigureDisplayMirrorOfDisplay(cfg, virtualDisplayID, CGMainDisplayID())
             if result == .success {
                 let complete = CGCompleteDisplayConfiguration(cfg, .forSession)
                 if complete == .success {
+                    completed = true
                     return true
                 }
-            } else {
-                CGCancelDisplayConfiguration(cfg)
             }
 
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
@@ -1268,12 +1274,18 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
                 return false
             }
 
+            var completed = false
+            defer {
+                if !completed {
+                    CGCancelDisplayConfiguration(cfg)
+                }
+            }
+
             let mainDisplayID = CGMainDisplayID()
             let mainBounds = CGDisplayBounds(mainDisplayID)
             let mainMirrorResult = CGConfigureDisplayMirrorOfDisplay(cfg, mainDisplayID, kCGNullDirectDisplay)
             let virtualMirrorResult = CGConfigureDisplayMirrorOfDisplay(cfg, virtualDisplayID, kCGNullDirectDisplay)
             if mainMirrorResult != .success || virtualMirrorResult != .success {
-                CGCancelDisplayConfiguration(cfg)
                 NSLog(
                     "TargetBridge: failed to detach mirror set for extended desktop (main=%d virtual=%d)",
                     mainMirrorResult.rawValue,
@@ -1302,7 +1314,6 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
             }
             let originResult = CGConfigureDisplayOrigin(cfg, virtualDisplayID, targetX, targetY)
             if mainOriginResult != .success || originResult != .success {
-                CGCancelDisplayConfiguration(cfg)
                 NSLog(
                     "TargetBridge: failed to position displays for extended desktop (main=%d virtual=%u targetX=%d targetY=%d result=%d)",
                     mainOriginResult.rawValue,
@@ -1317,6 +1328,7 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
 
             let complete = CGCompleteDisplayConfiguration(cfg, .forSession)
             if complete == .success {
+                completed = true
                 return true
             }
             NSLog(
