@@ -408,6 +408,12 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
         super.init()
     }
 
+    deinit {
+        if let encoder = vtEncoder {
+            VTCompressionSessionInvalidate(encoder)
+        }
+    }
+
     @Published var isConnected = false
     @Published var isStreaming = false
     @Published var statusText: String
@@ -458,8 +464,7 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     private var captureDelegate: CaptureDelegate?
     private var scStream: SCStream?
     private var directDisplayStream: TBDirectDisplayStreamCapture?
-    private var vtEncoder: VTCompressionSession?
-    private var vtEncoderRef: Unmanaged<TBDisplaySenderSession>?
+    nonisolated(unsafe) private var vtEncoder: VTCompressionSession?
 
     private var sentFrames = 0
     private var sentSnapshot = 0
@@ -762,8 +767,6 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
         }
         if let encoder = vtEncoder { VTCompressionSessionInvalidate(encoder) }
         vtEncoder = nil
-        vtEncoderRef?.release()
-        vtEncoderRef = nil
         connection?.stateUpdateHandler = nil
         connection?.cancel()
         connection = nil
@@ -1318,15 +1321,12 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     private func setupEncoder(width: Int, height: Int, preset: TBDisplayCapturePreset, codecType: CMVideoCodecType, averageBitRate: Int) {
         if let encoder = vtEncoder { VTCompressionSessionInvalidate(encoder) }
         vtEncoder = nil
-        vtEncoderRef?.release()
-        vtEncoderRef = nil
 
         let spec: NSDictionary = [
             kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true,
             kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder: true
         ]
-        let retained = Unmanaged.passRetained(self)
-        vtEncoderRef = retained
+        let context = Unmanaged.passUnretained(self)
 
         let callback: VTCompressionOutputCallback = { ref, _, status, _, sampleBuffer in
             guard let ref else { return }
@@ -1348,11 +1348,9 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
             imageBufferAttributes: nil,
             compressedDataAllocator: nil,
             outputCallback: callback,
-            refcon: retained.toOpaque(),
+            refcon: context.toOpaque(),
             compressionSessionOut: &session
         ) == noErr, let session else {
-            retained.release()
-            vtEncoderRef = nil
             return
         }
 
