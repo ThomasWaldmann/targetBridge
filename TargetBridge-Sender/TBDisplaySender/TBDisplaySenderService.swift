@@ -301,6 +301,10 @@ private final class TBDirectDisplayStreamCapture {
         stream?.stop()
         stream = nil
     }
+
+    deinit {
+        stop()
+    }
 }
 
 @MainActor
@@ -409,8 +413,35 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     }
 
     deinit {
-        if let encoder = vtEncoder {
-            VTCompressionSessionInvalidate(encoder)
+        let hTimer = heartbeatTimer
+        let fTimer = firstFrameTimer
+        let cTimer = cursorTimer
+        let fpsT = fpsTimer
+        let conn = connection
+        let stream = scStream
+        let delegate = captureDelegate
+        let activity = streamingActivity
+        let encoder = vtEncoder
+
+        DispatchQueue.main.async {
+            hTimer?.invalidate()
+            fTimer?.invalidate()
+            cTimer?.invalidate()
+            fpsT?.invalidate()
+            conn?.stateUpdateHandler = nil
+            conn?.cancel()
+            if let stream {
+                if let delegate {
+                    try? stream.removeStreamOutput(delegate, type: .screen)
+                }
+                stream.stopCapture(completionHandler: nil)
+            }
+            if let activity {
+                ProcessInfo.processInfo.endActivity(activity)
+            }
+            if let encoder {
+                VTCompressionSessionInvalidate(encoder)
+            }
         }
     }
 
@@ -454,28 +485,28 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     }
     @Published var streamResolutionText: String
 
-    private var connection: NWConnection?
+    nonisolated(unsafe) private var connection: NWConnection?
     private let connectionQueue = DispatchQueue(label: "fd.tbmonitor.sender.connection", qos: .userInteractive)
     private var recvBuffer = Data()
 
     private var session = ReceiverBackedVirtualDisplaySession()
     private var activeProfile: TBMonitorDisplayProfile?
 
-    private var captureDelegate: CaptureDelegate?
-    private var scStream: SCStream?
+    nonisolated(unsafe) private var captureDelegate: CaptureDelegate?
+    nonisolated(unsafe) private var scStream: SCStream?
     private var directDisplayStream: TBDirectDisplayStreamCapture?
     nonisolated(unsafe) private var vtEncoder: VTCompressionSession?
 
     private var sentFrames = 0
     private var sentSnapshot = 0
     private var sessionAckSent = false
-    private var fpsTimer: Timer?
-    private var heartbeatTimer: Timer?
-    private var firstFrameTimer: Timer?
-    private var cursorTimer: Timer?
+    nonisolated(unsafe) private var fpsTimer: Timer?
+    nonisolated(unsafe) private var heartbeatTimer: Timer?
+    nonisolated(unsafe) private var firstFrameTimer: Timer?
+    nonisolated(unsafe) private var cursorTimer: Timer?
     private var heartbeatSequence: UInt64 = 0
     private var statusState: TBDisplaySenderStatusState = .ready
-    private var streamingActivity: NSObjectProtocol?
+    nonisolated(unsafe) private var streamingActivity: NSObjectProtocol?
     private var pendingVideoPackets = 0
     private var inFlightEncodeFrames = 0
     private var displayStreamFrameSequence: CMTimeValue = 0
