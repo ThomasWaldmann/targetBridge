@@ -248,13 +248,27 @@ enum TBDisplayCaptureSource: String, CaseIterable, Identifiable {
     }
 }
 
+final class WeakSessionBox: @unchecked Sendable {
+    weak var session: TBDisplaySenderSession?
+    init(_ session: TBDisplaySenderSession) {
+        self.session = session
+    }
+}
+
+final class SendableIOSurface: @unchecked Sendable {
+    let surface: IOSurface
+    init(_ surface: IOSurface) {
+        self.surface = surface
+    }
+}
+
 private final class TBDirectDisplayStreamCapture {
-    private let serviceRef: UnsafeMutableRawPointer
+    private let box: WeakSessionBox
     private let queue: DispatchQueue
     private var stream: CGDisplayStream?
 
     init(service: TBDisplaySenderSession, queue: DispatchQueue) {
-        self.serviceRef = Unmanaged.passUnretained(service).toOpaque()
+        self.box = WeakSessionBox(service)
         self.queue = queue
     }
 
@@ -265,7 +279,6 @@ private final class TBDirectDisplayStreamCapture {
             CGDisplayStream.minimumFrameTime: 1.0 / Double(preset.expectedFrameRate)
         ]
 
-        let serviceRefValue = UInt(bitPattern: serviceRef)
         let displayStream = CGDisplayStream(
             dispatchQueueDisplay: displayID,
             outputWidth: preset.width,
@@ -273,18 +286,13 @@ private final class TBDirectDisplayStreamCapture {
             pixelFormat: Int32(kCVPixelFormatType_32BGRA),
             properties: properties,
             queue: queue
-        ) { status, displayTime, surface, _ in
-            guard status == .frameComplete, let surface else { return }
-            let surfaceRefValue = UInt(bitPattern: Unmanaged.passRetained(surface).toOpaque())
-            DispatchQueue.main.async {
-                guard let serviceRef = UnsafeRawPointer(bitPattern: serviceRefValue),
-                      let surfaceRef = UnsafeRawPointer(bitPattern: surfaceRefValue) else {
-                    return
-                }
-                let service = Unmanaged<TBDisplaySenderSession>.fromOpaque(serviceRef).takeUnretainedValue()
-                let surface = Unmanaged<IOSurface>.fromOpaque(surfaceRef).takeRetainedValue()
+        ) { [weak box] status, displayTime, surface, _ in
+            guard status == .frameComplete, let surface, let box else { return }
+            let sendableSurface = SendableIOSurface(surface)
+            DispatchQueue.main.async { [weak box] in
+                guard let service = box?.session else { return }
                 MainActor.assumeIsolated {
-                    service.encodeDisplaySurface(surface, displayTime: displayTime)
+                    service.encodeDisplaySurface(sendableSurface.surface, displayTime: displayTime)
                 }
             }
         }
@@ -413,6 +421,14 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     }
 
     deinit {
+        // Synchronously invalidate encoder and release refcon to avoid background callback races
+        if let encoder = vtEncoder {
+            VTCompressionSessionInvalidate(encoder)
+        }
+        if let refcon = encoderRefcon {
+            Unmanaged<WeakSessionBox>.fromOpaque(refcon).release()
+        }
+
         let hTimer = heartbeatTimer
         let fTimer = firstFrameTimer
         let cTimer = cursorTimer
@@ -421,7 +437,6 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
         let stream = scStream
         let delegate = captureDelegate
         let activity = streamingActivity
-        let encoder = vtEncoder
 
         DispatchQueue.main.async {
             hTimer?.invalidate()
@@ -438,9 +453,6 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
             }
             if let activity {
                 ProcessInfo.processInfo.endActivity(activity)
-            }
-            if let encoder {
-                VTCompressionSessionInvalidate(encoder)
             }
         }
     }
@@ -496,6 +508,7 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     nonisolated(unsafe) private var scStream: SCStream?
     private var directDisplayStream: TBDirectDisplayStreamCapture?
     nonisolated(unsafe) private var vtEncoder: VTCompressionSession?
+    nonisolated(unsafe) private var encoderRefcon: UnsafeMutableRawPointer?
 
     private var sentFrames = 0
     private var sentSnapshot = 0
@@ -798,6 +811,10 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
         }
         if let encoder = vtEncoder { VTCompressionSessionInvalidate(encoder) }
         vtEncoder = nil
+        if let refcon = encoderRefcon {
+            Unmanaged<WeakSessionBox>.fromOpaque(refcon).release()
+            encoderRefcon = nil
+        }
         connection?.stateUpdateHandler = nil
         connection?.cancel()
         connection = nil
@@ -1364,17 +1381,25 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     private func setupEncoder(width: Int, height: Int, preset: TBDisplayCapturePreset, codecType: CMVideoCodecType, averageBitRate: Int) {
         if let encoder = vtEncoder { VTCompressionSessionInvalidate(encoder) }
         vtEncoder = nil
+        if let refcon = encoderRefcon {
+            Unmanaged<WeakSessionBox>.fromOpaque(refcon).release()
+            encoderRefcon = nil
+        }
 
         let spec: NSDictionary = [
             kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true,
             kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder: true
         ]
-        let context = Unmanaged.passUnretained(self)
 
-        let callback: VTCompressionOutputCallback = { ref, _, status, _, sampleBuffer in
-            guard let ref else { return }
-            let service = Unmanaged<TBDisplaySenderSession>.fromOpaque(ref).takeUnretainedValue()
+        let box = WeakSessionBox(self)
+        let refcon = Unmanaged.passRetained(box).toOpaque()
+        encoderRefcon = refcon
+
+        let callback: VTCompressionOutputCallback = { refcon, _, status, _, sampleBuffer in
+            guard let refcon else { return }
+            let box = Unmanaged<WeakSessionBox>.fromOpaque(refcon).takeUnretainedValue()
             DispatchQueue.main.async {
+                guard let service = box.session else { return }
                 service.inFlightEncodeFrames = max(0, service.inFlightEncodeFrames - 1)
                 guard status == noErr, let sampleBuffer else { return }
                 service.handleEncoded(sampleBuffer)
@@ -1391,9 +1416,13 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
             imageBufferAttributes: nil,
             compressedDataAllocator: nil,
             outputCallback: callback,
-            refcon: context.toOpaque(),
+            refcon: refcon,
             compressionSessionOut: &session
         ) == noErr, let session else {
+            if let refcon = encoderRefcon {
+                Unmanaged<WeakSessionBox>.fromOpaque(refcon).release()
+                encoderRefcon = nil
+            }
             return
         }
 
