@@ -1807,15 +1807,13 @@ private final class SBAudioConverter: Sendable {
             let buffers = UnsafeBufferPointer(start: firstBufferPtr, count: channelCount)
 
             if inFormat.isInterleaved {
-                if let dest = inputBuffer.floatChannelData?[0] ?? UnsafeMutablePointer<Float>(OpaquePointer(inputBuffer.int16ChannelData?[0])),
-                   let src = buffers[0].mData {
-                    memcpy(dest, src, Int(buffers[0].mDataByteSize))
-                }
+                // ScreenCaptureKit always delivers float32 non-interleaved audio.
+                // This branch should never execute; assert to catch unexpected format changes.
+                assertionFailure("SBAudioConverter: unexpected interleaved input format from ScreenCaptureKit")
+                return nil
             } else {
                 for i in 0..<channelCount {
                     if let dest = inputBuffer.floatChannelData?[i], let src = buffers[i].mData {
-                        memcpy(dest, src, Int(buffers[i].mDataByteSize))
-                    } else if let dest = inputBuffer.int16ChannelData?[i], let src = buffers[i].mData {
                         memcpy(dest, src, Int(buffers[i].mDataByteSize))
                     }
                 }
@@ -1825,7 +1823,13 @@ private final class SBAudioConverter: Sendable {
             guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: audioFrameCount) else { return nil }
 
             var error: NSError?
+            var inputConsumed = false
             let convertStatus = converter.convert(to: outputBuffer, error: &error) { inNumPackets, outStatus in
+                if inputConsumed {
+                    outStatus.pointee = .noDataNow
+                    return nil
+                }
+                inputConsumed = true
                 outStatus.pointee = .haveData
                 return inputBuffer
             }
