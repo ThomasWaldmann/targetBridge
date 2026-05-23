@@ -1020,16 +1020,15 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
                 }
                 display = mainDisplay
             } else {
-                if session.displayID != kCGNullDirectDisplay {
-                    if startDirectDisplayStream(displayID: session.displayID, preset: preset) {
-                        return true
-                    }
+                // In extended desktop mode, we capture the virtual display using ScreenCaptureKit
+                // to support both video and high-fidelity system audio.
+                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+                if session.displayID != kCGNullDirectDisplay,
+                   let targetDisplay = content.displays.first(where: { $0.displayID == session.displayID }) {
+                    display = targetDisplay
+                } else {
+                    display = try await waitForCaptureDisplay()
                 }
-                let capturedDisplay = try await waitForCaptureDisplay()
-                if startDirectDisplayStream(displayID: capturedDisplay.displayID, preset: preset) {
-                    return true
-                }
-                display = capturedDisplay
             }
 
             let configuration = SCStreamConfiguration()

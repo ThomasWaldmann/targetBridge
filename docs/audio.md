@@ -1,6 +1,6 @@
 # Audio Streaming Architecture & Synchronization
 
-TargetBridge implements raw, high-fidelity system audio streaming from a sender Mac to a receiver Mac in **Mirror Mode (Duplicate Desktop)**. The stream is designed for ultra-low latency, real-time synchronization with H.264/HEVC video decoding, and robust scheduling jitter tolerance.
+TargetBridge implements raw, high-fidelity system audio streaming from a sender Mac to a receiver Mac in both **Mirror Mode (Duplicate Desktop)** and **Extended Display Mode (Virtual Desktop)**. The stream is designed for ultra-low latency, real-time synchronization with H.264/HEVC video decoding, and robust scheduling jitter tolerance.
 
 This document describes the technical architecture, dynamic format conversion pipeline, and the synchronization breakthroughs that eliminated playout lag without sacrificing audio quality.
 
@@ -41,6 +41,14 @@ The `SBAudioConverter` class executes this:
 1. **Pointer Extraction**: Safely extracts the non-interleaved channel buffers using `CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer`.
 2. **Hardware-Accelerated Conversion**: Feeds the float pointers to an `AVAudioConverter` configured to transcode into a packed 16-bit signed integer interleaved `AudioStreamBasicDescription` (ASBD).
 3. **Low-Allocation Copying**: Performs conversion frame-by-frame with zero persistent copies, preserving thread safety using Swift concurrency locks.
+
+### 3. Extended Display Mode Capture (Unified SCStream)
+To support audio in Extended Display Mode, the capture strategy was unified:
+* **The Legacy Approach**: Previously, Extended Display Mode captured the virtual display using the video-only `CGDisplayStream` API. However, `CGDisplayStream` has no audio capture capability.
+* **The Modern Solution**: The virtual display capture was migrated to modern **ScreenCaptureKit (`SCStream`)**.
+  - Since the macOS WindowServer exposes the virtual extended desktop as a standard `SCDisplay` object inside `SCShareableContent.displays`, we can resolve and capture it using `SCStream`.
+  - By setting `capturesAudio = true` on the virtual display stream, ScreenCaptureKit captures system audio and delivers it alongside the virtual display's H.264 video frames.
+  - This unifies the entire sender-side pipeline, unlocking high-fidelity, low-latency audio for both Mirror and Extended Display sessions without needing separate capture loops.
 
 ---
 
