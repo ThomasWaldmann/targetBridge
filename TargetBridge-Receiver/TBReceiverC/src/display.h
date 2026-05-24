@@ -38,6 +38,9 @@ void tb_disp_set_cursor(struct tb_display *d,
                         int visible,
                         int type);
 
+/* Adjust brightness dynamically on system displays. */
+void tb_disp_set_brightness(struct tb_display *d, double level);
+
 /* Returns 1 if user requested quit (ESC or window close). */
 int  tb_disp_poll_quit(struct tb_display *d);
 

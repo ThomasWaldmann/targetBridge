@@ -9,7 +9,12 @@ enum TBMonitorPacketType: UInt8 {
     case heartbeat = 0x30
     case teardown = 0x31
     case cursor = 0x32
+    case brightness = 0x33
     case testData = 0x40
+}
+
+struct TBMonitorBrightness: Codable {
+    var level: Double
 }
 
 struct TBMonitorHelloReceiver: Codable {

@@ -410,6 +410,11 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
 
     @Published var isConnected = false
     @Published var isStreaming = false
+    @Published var brightness: Double = 1.0 {
+        didSet {
+            sendBrightnessUpdate()
+        }
+    }
     @Published var statusText: String
     @Published var localTBIP = ""
     @Published var selectedReceiverID = ""
@@ -886,6 +891,15 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
         send(packet)
     }
 
+    func sendBrightnessUpdate() {
+        guard isConnected else { return }
+        guard let packet = TBMonitorProtocol.makeJSONPacket(
+            type: .brightness,
+            value: TBMonitorBrightness(level: brightness)
+        ) else { return }
+        send(packet)
+    }
+
     private func receiveLoop(on connection: NWConnection) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 256 * 1024) { [weak self] data, _, isDone, error in
             Task { @MainActor [weak self] in
@@ -985,6 +999,8 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
                 self.stop(resetStatusTo: nil)
                 return
             }
+
+            self.sendBrightnessUpdate()
 
             if self.captureSource == .extendedDesktop {
                 self.scheduleExtendedDesktopRecovery(for: self.session.displayID)

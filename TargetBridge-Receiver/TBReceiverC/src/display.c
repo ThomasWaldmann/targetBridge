@@ -11,6 +11,7 @@
 #include <CoreGraphics/CoreGraphics.h>
 #include <CoreText/CoreText.h>
 #include <SDL.h>
+#include <dlfcn.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -940,4 +941,39 @@ void tb_disp_render_status(struct tb_display *d,
     SDL_RenderClear(d->ren);
     if (d->status_tex) SDL_RenderCopy(d->ren, d->status_tex, NULL, NULL);
     SDL_RenderPresent(d->ren);
+}
+
+void tb_disp_set_brightness(struct tb_display *d, double level) {
+    (void)d;
+    if (level < 0.0) level = 0.0;
+    if (level > 1.0) level = 1.0;
+
+    void *lib = dlopen("/System/Library/PrivateFrameworks/DisplayServices.framework/Versions/A/DisplayServices", RTLD_LAZY);
+    if (!lib) {
+        fprintf(stderr, "[disp] failed to dlopen DisplayServices\n");
+        return;
+    }
+
+    typedef int (*SetBrightnessFunc)(CGDirectDisplayID display, float brightness);
+    SetBrightnessFunc set_brightness = (SetBrightnessFunc)dlsym(lib, "DisplayServicesSetBrightness");
+    if (!set_brightness) {
+        fprintf(stderr, "[disp] failed to find DisplayServicesSetBrightness symbol\n");
+        dlclose(lib);
+        return;
+    }
+
+    CGDirectDisplayID displays[16];
+    uint32_t count = 0;
+    if (CGGetActiveDisplayList(16, displays, &count) == kCGErrorSuccess) {
+        for (uint32_t i = 0; i < count; i++) {
+            set_brightness(displays[i], (float)level);
+        }
+        fprintf(stderr, "[disp] set brightness to %.2f on %u display(s)\n", level, count);
+    } else {
+        CGDirectDisplayID main_disp = CGMainDisplayID();
+        set_brightness(main_disp, (float)level);
+        fprintf(stderr, "[disp] set brightness to %.2f on main display\n", level);
+    }
+
+    dlclose(lib);
 }

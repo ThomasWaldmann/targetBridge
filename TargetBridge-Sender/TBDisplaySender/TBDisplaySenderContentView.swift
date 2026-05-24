@@ -279,6 +279,30 @@ private struct TBDisplaySenderSessionCard: View {
                     .font(.footnote)
                 }
 
+                if session.isConnected {
+                    VStack(alignment: .leading, spacing: 10) {
+                        sectionHeading(TBDisplaySenderL10n.brightnessGroup(service.language))
+                        HStack(spacing: 12) {
+                            Image(systemName: "sun.min.fill")
+                                .font(.system(size: 16))
+                                .foregroundStyle(.secondary)
+
+                            Slider(value: $session.brightness, in: 0.0...1.0)
+                                .accentColor(.orange)
+
+                            Image(systemName: "sun.max.fill")
+                                .font(.system(size: 16))
+                                .foregroundStyle(.secondary)
+
+                            Text(String(format: "%.0f%%", session.brightness * 100))
+                                .font(.system(.body, design: .monospaced))
+                                .frame(width: 44, alignment: .trailing)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+
                 HStack(alignment: .top, spacing: 14) {
                     metricCard(
                         title: TBDisplaySenderL10n.cableTestGroup(service.language),

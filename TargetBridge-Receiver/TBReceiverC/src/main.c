@@ -208,6 +208,29 @@ static int extract_json_bool_field(const uint8_t *payload,
     return extract_json_int_field(payload, len, key, out_value);
 }
 
+static int extract_json_double_field(const uint8_t *payload,
+                                     size_t len,
+                                     const char *key,
+                                     double *out_value) {
+    if (!payload || !key || !out_value) return 0;
+
+    const char *text = (const char *)payload;
+    const char *pos = strstr(text, key);
+    if (!pos) return 0;
+
+    pos = strchr(pos, ':');
+    if (!pos) return 0;
+    pos++;
+    while ((size_t)(pos - text) < len && (*pos == ' ' || *pos == '\t')) pos++;
+    if ((size_t)(pos - text) >= len) return 0;
+
+    char *end = NULL;
+    double value = strtod(pos, &end);
+    if (end == pos) return 0;
+    *out_value = value;
+    return 1;
+}
+
 /* ---- Callbacks: decoder → display ------------------------------------ */
 
 static void on_frame(const uint8_t *y, int y_stride,
@@ -288,6 +311,13 @@ static void on_packet(uint8_t type, const uint8_t *payload, size_t len, void *ud
             (void)extract_json_bool_field(payload, len, "\"visible\"", &visible);
             (void)extract_json_int_field(payload, len, "\"type\"", &type);
             tb_disp_set_cursor(a->disp, x, y, w, h, visible, type);
+        }
+        break;
+    case TB_PKT_BRIGHTNESS:
+        {
+            double level = 1.0;
+            (void)extract_json_double_field(payload, len, "\"level\"", &level);
+            tb_disp_set_brightness(a->disp, level);
         }
         break;
     case TB_PKT_HEARTBEAT:

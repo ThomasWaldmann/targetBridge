@@ -304,6 +304,14 @@ enum TBDisplaySenderL10n {
         }
     }
 
+    static func brightnessGroup(_ language: TBDisplaySenderLanguage) -> String {
+        switch language {
+        case .italian: return "Luminosità"
+        case .english: return "Brightness"
+        case .german: return "Helligkeit"
+        }
+    }
+
     static func streamResolutionGroup(_ language: TBDisplaySenderLanguage) -> String {
         switch language {
         case .italian: return "Risoluzione stream"
