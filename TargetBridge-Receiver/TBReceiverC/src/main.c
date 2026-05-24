@@ -326,9 +326,9 @@ static void on_packet(uint8_t type, const uint8_t *payload, size_t len, void *ud
         if (a->audio_device != 0) {
             SDL_LockAudioDevice(a->audio_device);
             
-            // Limit audio backlog to 80ms (80 * 192 = 15360 bytes).
+            // Limit audio backlog to 150ms (150 * 192 = 28800 bytes) to cushion against network/scheduling jitter.
             // If the buffer would exceed this, smoothly discard the oldest excess bytes.
-            const int cap_bytes = 15360;
+            const int cap_bytes = 28800;
             if (a->audio_buf_size + len > cap_bytes) {
                 int excess = (a->audio_buf_size + len) - cap_bytes;
                 a->audio_buf_tail = (a->audio_buf_tail + excess) % AUDIO_BUF_CAP;
@@ -369,11 +369,13 @@ static void on_packet(uint8_t type, const uint8_t *payload, size_t len, void *ud
 
 /* ---- Networking helpers ---------------------------------------------- */
 
-static int drain_socket(struct app *a) {
+static int drain_socket(struct app *a, int *bytes_read) {
     uint8_t buf[1024 * 1024];
+    if (bytes_read) *bytes_read = 0;
     for (;;) {
         ssize_t n = read(a->client_fd, buf, sizeof(buf));
         if (n > 0) {
+            if (bytes_read) *bytes_read += n;
             if (tb_parser_feed(&a->parser, buf, (size_t)n) < 0) return -1;
         } else if (n == 0) {
             return -1;  /* peer closed */
@@ -573,6 +575,7 @@ int main(int argc, char **argv) {
 
     while (!g_term && !tb_disp_poll_quit(a.disp)) {
         uint64_t t = now_ms();
+        int bytes_read = 0;
 
         if (t - a.last_ip_check_ms >= 1000) {
             char refreshed_ip[64] = {0};
@@ -598,7 +601,7 @@ int main(int argc, char **argv) {
                 send_receiver_info(&a);
             }
         } else {
-            if (drain_socket(&a) < 0) close_client(&a);
+            if (drain_socket(&a, &bytes_read) < 0) close_client(&a);
             else if (a.close_requested) close_client(&a);
         }
 
@@ -615,8 +618,9 @@ int main(int argc, char **argv) {
         }
 
         /* Yield only while idle. During active video, keep draining and
-         * rendering without injecting an extra millisecond of latency. */
-        if (a.client_fd < 0 || !a.have_video_frame) {
+         * rendering without injecting an extra millisecond of latency.
+         * If we didn't read any bytes from the socket, we can safely yield 1ms. */
+        if (a.client_fd < 0 || !a.have_video_frame || bytes_read == 0) {
             SDL_Delay(1);
         }
     }
