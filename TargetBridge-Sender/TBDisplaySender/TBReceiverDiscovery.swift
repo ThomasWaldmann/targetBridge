@@ -110,6 +110,10 @@ final class TBReceiverDiscovery: NSObject, ObservableObject {
         services.removeValue(forKey: service.name)
         receivers.removeAll { $0.serviceName == service.name }
     }
+
+    deinit {
+        stop()
+    }
 }
 
 extension TBReceiverDiscovery: NetServiceBrowserDelegate {

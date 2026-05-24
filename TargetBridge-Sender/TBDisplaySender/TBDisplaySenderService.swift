@@ -246,13 +246,29 @@ enum TBDisplayCaptureSource: String, CaseIterable, Identifiable {
     }
 }
 
+final class WeakSessionBox: @unchecked Sendable {
+    weak var session: TBDisplaySenderSession?
+
+    init(_ session: TBDisplaySenderSession) {
+        self.session = session
+    }
+}
+
+final class SendableIOSurface: @unchecked Sendable {
+    let surface: IOSurface
+
+    init(_ surface: IOSurface) {
+        self.surface = surface
+    }
+}
+
 private final class TBDirectDisplayStreamCapture {
-    private let serviceRef: UnsafeMutableRawPointer
+    private let box: WeakSessionBox
     private let queue: DispatchQueue
     private var stream: CGDisplayStream?
 
     init(service: TBDisplaySenderSession, queue: DispatchQueue) {
-        self.serviceRef = Unmanaged.passUnretained(service).toOpaque()
+        self.box = WeakSessionBox(service)
         self.queue = queue
     }
 
@@ -263,7 +279,6 @@ private final class TBDirectDisplayStreamCapture {
             CGDisplayStream.minimumFrameTime: 1.0 / Double(preset.expectedFrameRate)
         ]
 
-        let serviceRefValue = UInt(bitPattern: serviceRef)
         let displayStream = CGDisplayStream(
             dispatchQueueDisplay: displayID,
             outputWidth: preset.width,
@@ -271,18 +286,13 @@ private final class TBDirectDisplayStreamCapture {
             pixelFormat: Int32(kCVPixelFormatType_32BGRA),
             properties: properties,
             queue: queue
-        ) { status, displayTime, surface, _ in
-            guard status == .frameComplete, let surface else { return }
-            let surfaceRefValue = UInt(bitPattern: Unmanaged.passRetained(surface).toOpaque())
-            DispatchQueue.main.async {
-                guard let serviceRef = UnsafeRawPointer(bitPattern: serviceRefValue),
-                      let surfaceRef = UnsafeRawPointer(bitPattern: surfaceRefValue) else {
-                    return
-                }
-                let service = Unmanaged<TBDisplaySenderSession>.fromOpaque(serviceRef).takeUnretainedValue()
-                let surface = Unmanaged<IOSurface>.fromOpaque(surfaceRef).takeRetainedValue()
+        ) { [weak box] status, displayTime, surface, _ in
+            guard status == .frameComplete, let surface, let box else { return }
+            let sendableSurface = SendableIOSurface(surface)
+            DispatchQueue.main.async { [weak box] in
+                guard let service = box?.session else { return }
                 MainActor.assumeIsolated {
-                    service.encodeDisplaySurface(surface, displayTime: displayTime)
+                    service.encodeDisplaySurface(sendableSurface.surface, displayTime: displayTime)
                 }
             }
         }
@@ -298,6 +308,10 @@ private final class TBDirectDisplayStreamCapture {
     func stop() {
         stream?.stop()
         stream = nil
+    }
+
+    deinit {
+        stop()
     }
 }
 
@@ -474,6 +488,8 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     private var pendingVideoPackets = 0
     private var inFlightEncodeFrames = 0
     private var displayStreamFrameSequence: CMTimeValue = 0
+    private var lastCheckedCursor: NSCursor?
+    private var lastCheckedCursorType: Int = 0
     private var baselineDisplayIDs = Set<CGDirectDisplayID>()
     private var cursorDisplayID: CGDirectDisplayID = kCGNullDirectDisplay
     private var lastCursorPacket: TBMonitorCursor?
@@ -1178,14 +1194,20 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
                 return false
             }
 
+            var completed = false
+            defer {
+                if !completed {
+                    CGCancelDisplayConfiguration(cfg)
+                }
+            }
+
             let result = CGConfigureDisplayMirrorOfDisplay(cfg, virtualDisplayID, CGMainDisplayID())
             if result == .success {
                 let complete = CGCompleteDisplayConfiguration(cfg, .forSession)
                 if complete == .success {
+                    completed = true
                     return true
                 }
-            } else {
-                CGCancelDisplayConfiguration(cfg)
             }
 
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
@@ -1245,12 +1267,18 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
                 return false
             }
 
+            var completed = false
+            defer {
+                if !completed {
+                    CGCancelDisplayConfiguration(cfg)
+                }
+            }
+
             let mainDisplayID = CGMainDisplayID()
             let mainBounds = CGDisplayBounds(mainDisplayID)
             let mainMirrorResult = CGConfigureDisplayMirrorOfDisplay(cfg, mainDisplayID, kCGNullDirectDisplay)
             let virtualMirrorResult = CGConfigureDisplayMirrorOfDisplay(cfg, virtualDisplayID, kCGNullDirectDisplay)
             if mainMirrorResult != .success || virtualMirrorResult != .success {
-                CGCancelDisplayConfiguration(cfg)
                 NSLog(
                     "TargetBridge: failed to detach mirror set for extended desktop (main=%d virtual=%d)",
                     mainMirrorResult.rawValue,
@@ -1279,7 +1307,6 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
             }
             let originResult = CGConfigureDisplayOrigin(cfg, virtualDisplayID, targetX, targetY)
             if mainOriginResult != .success || originResult != .success {
-                CGCancelDisplayConfiguration(cfg)
                 NSLog(
                     "TargetBridge: failed to position displays for extended desktop (main=%d virtual=%u targetX=%d targetY=%d result=%d)",
                     mainOriginResult.rawValue,
@@ -1294,6 +1321,7 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
 
             let complete = CGCompleteDisplayConfiguration(cfg, .forSession)
             if complete == .success {
+                completed = true
                 return true
             }
             NSLog(
@@ -1600,31 +1628,43 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
 
     private func getCurrentCursorType() -> Int {
         guard let current = NSCursor.currentSystem else { return 0 }
+        if let last = lastCheckedCursor, last == current {
+            return lastCheckedCursorType
+        }
+
+        lastCheckedCursor = current
+
         if let currentPng = Self.normalizedPng(for: current.image),
            let matchedType = Self.standardCursorPngs[currentPng] {
+            lastCheckedCursorType = matchedType
             return matchedType
         }
 
         let size = current.image.size
         let hotSpot = current.hotSpot
+        let type: Int
         if size.width > 0 && size.height > 0 {
             if hotSpot.x > 0 && hotSpot.x < 10 && hotSpot.y == 0 {
-                return 2 // Pointing Hand
-            }
-            if size.width < size.height && abs(hotSpot.x - size.width / 2) < 2 && abs(hotSpot.y - size.height / 2) < 2 {
-                return 1 // I-Beam
-            }
-            if abs(hotSpot.x - size.width / 2) < 2 && abs(hotSpot.y - size.height / 2) < 2 {
+                type = 2 // Pointing Hand
+            } else if size.width < size.height && abs(hotSpot.x - size.width / 2) < 2 && abs(hotSpot.y - size.height / 2) < 2 {
+                type = 1 // I-Beam
+            } else if abs(hotSpot.x - size.width / 2) < 2 && abs(hotSpot.y - size.height / 2) < 2 {
                 if size.width > size.height {
-                    return 3 // Resize Horizontal
+                    type = 3 // Resize Horizontal
                 } else if size.height > size.width {
-                    return 4 // Resize Vertical
+                    type = 4 // Resize Vertical
                 } else {
-                    return 3 // Default fallback for square symmetric cursors: Resize Horizontal
+                    type = 3 // Default fallback for square symmetric cursors: Resize Horizontal
                 }
+            } else {
+                type = 0 // Arrow
             }
+        } else {
+            type = 0 // Arrow
         }
-        return 0 // Arrow
+
+        lastCheckedCursorType = type
+        return type
     }
 
     private func sendCursorUpdateIfNeeded(force: Bool = false) {
