@@ -164,6 +164,33 @@ enum TBDisplaySenderL10n {
         text("sender.available_tb_interfaces", language)
     }
 
+    static func transportKind(_ language: TBDisplaySenderLanguage) -> String {
+        switch language {
+        case .italian: return "Trasporto"
+        case .english: return "Transport"
+        case .german: return "Transport"
+        case .chinese: return "传输"
+        }
+    }
+
+    static func localInterfaceIP(_ language: TBDisplaySenderLanguage) -> String {
+        switch language {
+        case .italian: return "IP locale"
+        case .english: return "Local interface IP"
+        case .german: return "Lokale Interface-IP"
+        case .chinese: return "本地接口 IP"
+        }
+    }
+
+    static func availableLocalInterfaces(_ language: TBDisplaySenderLanguage) -> String {
+        switch language {
+        case .italian: return "Interfacce locali disponibili"
+        case .english: return "Available local interfaces"
+        case .german: return "Verfügbare lokale Schnittstellen"
+        case .chinese: return "可用本地接口"
+        }
+    }
+
     static func notDetected(_ language: TBDisplaySenderLanguage) -> String {
         text("sender.option.not_detected", language)
     }
@@ -300,6 +327,33 @@ enum TBDisplaySenderL10n {
         text("sender.toggle.show_menu_bar_icon", language)
     }
 
+    static func showSettings(_ language: TBDisplaySenderLanguage) -> String {
+        switch language {
+        case .italian: return "Mostra impostazioni"
+        case .english: return "Show settings"
+        case .german: return "Einstellungen anzeigen"
+        case .chinese: return "显示设置"
+        }
+    }
+
+    static func hideSettings(_ language: TBDisplaySenderLanguage) -> String {
+        switch language {
+        case .italian: return "Nascondi impostazioni"
+        case .english: return "Hide settings"
+        case .german: return "Einstellungen ausblenden"
+        case .chinese: return "隐藏设置"
+        }
+    }
+
+    static func settingsHint(_ language: TBDisplaySenderLanguage) -> String {
+        switch language {
+        case .italian: return "Lascia visibili solo i controlli quotidiani e apri qui le preferenze quando devi riconfigurare."
+        case .english: return "Keep daily controls visible and open this section only when you need to reconfigure the app."
+        case .german: return "Lass die täglichen Steuerelemente sichtbar und öffne diesen Bereich nur, wenn du die App neu konfigurieren musst."
+        case .chinese: return "让日常控制保持可见，只在需要重新配置应用时再打开这里。"
+        }
+    }
+
     static func largeCursor(_ language: TBDisplaySenderLanguage) -> String {
         text("sender.toggle.large_cursor", language)
     }
@@ -375,12 +429,12 @@ enum TBDisplaySenderL10n {
         ])
     }
 
-    static func streamSummary(preset: TBDisplayCapturePreset, source: TBDisplayCaptureSource, language: TBDisplaySenderLanguage) -> String {
+    static func streamSummary(preset: TBDisplayCapturePreset, source: TBDisplayCaptureSource, language: TBDisplaySenderLanguage, codecName: String? = nil) -> String {
         text("sender.stream_summary", language, [
             "source": source.title(language),
             "description": preset.description,
             "preset": preset.title(language),
-            "codec": preset.codecName
+            "codec": codecName ?? preset.codecName
         ])
     }
 

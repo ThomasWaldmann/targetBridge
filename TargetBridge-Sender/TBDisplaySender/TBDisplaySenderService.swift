@@ -427,17 +427,28 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     @Published var isConnected = false
     @Published var isStreaming = false
     @Published var statusText: String
-    @Published var localTBIP = ""
-    @Published var selectedReceiverID = ""
+    @Published var transportKind: TBTransportKind = .thunderboltBridge
+    @Published var localInterfaceIP = ""
+    @Published var selectedReceiverID = "" {
+        didSet {
+            if selectedReceiverID.isEmpty {
+                receiverSupportsHEVCDecodeHint = nil
+            }
+        }
+    }
     @Published var isCableTesting = false
     @Published var cableTestResult: Double? = nil
     private var isCableTestConnection = false
     @Published var receiverIP: String = UserDefaults.standard.string(forKey: receiverIPDefaultsKey) ?? "" {
         didSet {
             UserDefaults.standard.set(receiverIP, forKey: Self.receiverIPDefaultsKey)
+            if receiverIP != oldValue {
+                receiverSupportsHEVCDecodeHint = nil
+            }
         }
     }
     @Published var audioEnabled: Bool
+    var receiverSupportsHEVCDecodeHint: Bool?
     @Published var senderFPS = 0
     @Published var receiverPanelText: String
     @Published var virtualDisplayText: String
@@ -472,6 +483,8 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     private var session = ReceiverBackedVirtualDisplaySession()
     private let audioConverter = SBAudioConverter()
     private var activeProfile: TBMonitorDisplayProfile?
+    private var activeCodecType: CMVideoCodecType?
+    private var activeCodecName: String?
 
     private var captureDelegate: CaptureDelegate?
     private var scStream: SCStream?
@@ -497,6 +510,7 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     private var baselineDisplayIDs = Set<CGDirectDisplayID>()
     private var cursorDisplayID: CGDirectDisplayID = kCGNullDirectDisplay
     private var lastCursorPacket: TBMonitorCursor?
+    private static var cachedSupportsHEVCHardwareEncode: Bool?
 
     private final class CaptureDelegate: NSObject, SCStreamOutput, SCStreamDelegate {
         var onFrame: ((CMSampleBuffer) -> Void)?
@@ -544,9 +558,63 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
         statusText = state.text(language)
     }
 
+    private static func probeHEVCHardwareEncoderSupport() -> Bool {
+        if let cachedSupportsHEVCHardwareEncode {
+            return cachedSupportsHEVCHardwareEncode
+        }
+
+        let encoderSpecification: CFDictionary = [
+            kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder as String: true,
+            kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder as String: true
+        ] as CFDictionary
+
+        var session: VTCompressionSession?
+        let status = VTCompressionSessionCreate(
+            allocator: kCFAllocatorDefault,
+            width: 1920,
+            height: 1080,
+            codecType: kCMVideoCodecType_HEVC,
+            encoderSpecification: encoderSpecification,
+            imageBufferAttributes: nil,
+            compressedDataAllocator: nil,
+            outputCallback: nil,
+            refcon: nil,
+            compressionSessionOut: &session
+        )
+        if let session {
+            VTCompressionSessionInvalidate(session)
+        }
+
+        let supported = status == noErr
+        cachedSupportsHEVCHardwareEncode = supported
+        return supported
+    }
+
+    private func resolvedCodecType(for preset: TBDisplayCapturePreset, profile: TBMonitorDisplayProfile?) -> CMVideoCodecType {
+        switch preset {
+        case .standard1440p, .smooth1440p60, .smooth1800p60:
+            let receiverSupportsHEVC = profile?.supportsHEVCDecode ?? receiverSupportsHEVCDecodeHint ?? false
+            if receiverSupportsHEVC, Self.probeHEVCHardwareEncoderSupport() {
+                return kCMVideoCodecType_HEVC
+            }
+            return kCMVideoCodecType_H264
+        case .crisp2160p60, .native5k:
+            return preset.codecType
+        }
+    }
+
+    private func codecName(for codecType: CMVideoCodecType) -> String {
+        codecType == kCMVideoCodecType_HEVC ? "HEVC" : "H.264"
+    }
+
     private func refreshLocalizedText() {
         statusText = statusState.text(language)
-        streamResolutionText = TBDisplaySenderL10n.streamSummary(preset: capturePreset, source: captureSource, language: language)
+        streamResolutionText = TBDisplaySenderL10n.streamSummary(
+            preset: capturePreset,
+            source: captureSource,
+            language: language,
+            codecName: activeCodecName
+        )
 
         if let profile = activeProfile {
             receiverPanelText = TBDisplaySenderL10n.receiverSummary(profile, language: language)
@@ -564,11 +632,19 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
             virtualDisplayText = TBDisplaySenderL10n.virtualDisplayNotCreated(language)
         }
 
-        if captureDisplayText.isEmpty || captureDisplayText == TBDisplaySenderL10n.captureDisplayNotAvailable(.italian) || captureDisplayText == TBDisplaySenderL10n.captureDisplayNotAvailable(.english) || captureDisplayText == TBDisplaySenderL10n.captureDisplayNotAvailable(.german) {
+        if captureDisplayText.isEmpty
+            || captureDisplayText == TBDisplaySenderL10n.captureDisplayNotAvailable(.italian)
+            || captureDisplayText == TBDisplaySenderL10n.captureDisplayNotAvailable(.english)
+            || captureDisplayText == TBDisplaySenderL10n.captureDisplayNotAvailable(.german)
+            || captureDisplayText == TBDisplaySenderL10n.captureDisplayNotAvailable(.chinese) {
             captureDisplayText = TBDisplaySenderL10n.captureDisplayNotAvailable(language)
         }
 
-        if displayStateText.isEmpty || displayStateText == TBDisplaySenderL10n.displayStateNotAvailable(.italian) || displayStateText == TBDisplaySenderL10n.displayStateNotAvailable(.english) || displayStateText == TBDisplaySenderL10n.displayStateNotAvailable(.german) {
+        if displayStateText.isEmpty
+            || displayStateText == TBDisplaySenderL10n.displayStateNotAvailable(.italian)
+            || displayStateText == TBDisplaySenderL10n.displayStateNotAvailable(.english)
+            || displayStateText == TBDisplaySenderL10n.displayStateNotAvailable(.german)
+            || displayStateText == TBDisplaySenderL10n.displayStateNotAvailable(.chinese) {
             displayStateText = TBDisplaySenderL10n.displayStateNotAvailable(language)
         }
     }
@@ -594,9 +670,11 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     }
 
     func connect() {
-        guard connection == nil, !receiverIP.isEmpty, !localTBIP.isEmpty else { return }
+        guard connection == nil, !receiverIP.isEmpty, !localInterfaceIP.isEmpty else { return }
         recvBuffer.removeAll(keepingCapacity: false)
         activeProfile = nil
+        activeCodecType = nil
+        activeCodecName = nil
         setStatus(.connecting(receiverIP))
 
         let tcpOptions = NWProtocolTCP.Options()
@@ -605,7 +683,7 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
         params.allowLocalEndpointReuse = true
         params.serviceClass = .interactiveVideo
         if let localPort = NWEndpoint.Port(rawValue: 0) {
-            params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(localTBIP), port: localPort)
+            params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(localInterfaceIP), port: localPort)
         }
         let conn = NWConnection(
             host: NWEndpoint.Host(receiverIP),
@@ -806,6 +884,8 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
             currentSession.destroy()
         }
         activeProfile = nil
+        activeCodecType = nil
+        activeCodecName = nil
         isConnected = false
         isStreaming = false
         isCableTesting = false
@@ -889,6 +969,7 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     private func sendHello() {
         let name = Host.current().localizedName ?? "MacBook"
         let preset = capturePreset
+        let helloCodecType = resolvedCodecType(for: preset, profile: activeProfile)
         guard let packet = TBMonitorProtocol.makeJSONPacket(
             type: .helloReceiver,
             value: TBMonitorHelloReceiver(
@@ -898,7 +979,7 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
                 captureSource: captureSource.title(language),
                 captureWidth: preset.width,
                 captureHeight: preset.height,
-                codec: preset.codecName
+                codec: codecName(for: helloCodecType)
             )
         ) else { return }
         send(packet)
@@ -968,7 +1049,11 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
         else { return }
 
         activeProfile = profile
+        if let supportsHEVCDecode = profile.supportsHEVCDecode {
+            receiverSupportsHEVCDecodeHint = supportsHEVCDecode
+        }
         receiverPanelText = TBDisplaySenderL10n.receiverSummary(profile, language: language)
+        sendHello()
 
         Task { @MainActor in
             if self.isCableTestConnection {
@@ -1034,6 +1119,10 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     private func startCapture(for profile: TBMonitorDisplayProfile) async -> Bool {
         do {
             let preset = capturePreset
+            let codecType = resolvedCodecType(for: preset, profile: profile)
+            let codecName = codecName(for: codecType)
+            activeCodecType = codecType
+            activeCodecName = codecName
 
             let display: SCDisplay
             if captureSource == .desktopMirror {
@@ -1070,10 +1159,15 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
                 width: preset.width,
                 height: preset.height,
                 preset: preset,
-                codecType: preset.codecType,
+                codecType: codecType,
                 averageBitRate: preset.averageBitRate
             )
-            streamResolutionText = TBDisplaySenderL10n.streamSummary(preset: preset, source: captureSource, language: language)
+            streamResolutionText = TBDisplaySenderL10n.streamSummary(
+                preset: preset,
+                source: captureSource,
+                language: language,
+                codecName: codecName
+            )
 
             let delegate = CaptureDelegate()
             delegate.onFrame = { [weak self] sampleBuffer in
@@ -1125,17 +1219,26 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     }
 
     private func startDirectDisplayStream(displayID: CGDirectDisplayID, preset: TBDisplayCapturePreset) -> Bool {
+        let codecType = resolvedCodecType(for: preset, profile: activeProfile)
+        let codecName = codecName(for: codecType)
+        activeCodecType = codecType
+        activeCodecName = codecName
         setupEncoder(
             width: preset.width,
             height: preset.height,
             preset: preset,
-            codecType: preset.codecType,
+            codecType: codecType,
             averageBitRate: preset.averageBitRate
         )
         guard vtEncoder != nil else { return false }
 
         displayStreamFrameSequence = 0
-        streamResolutionText = TBDisplaySenderL10n.streamSummary(preset: preset, source: captureSource, language: language)
+        streamResolutionText = TBDisplaySenderL10n.streamSummary(
+            preset: preset,
+            source: captureSource,
+            language: language,
+            codecName: codecName
+        )
 
         let directCapture = TBDirectDisplayStreamCapture(service: self, queue: connectionQueue)
         guard directCapture.start(displayID: displayID, preset: preset, showCursor: !largeCursor) else {
@@ -1524,7 +1627,7 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
             if let packet = TBMonitorProtocol.makeJSONPacket(type: .createSessionAck, value: ack) {
                 send(packet)
             }
-            setStatus(.captureActive(capturePreset.description, capturePreset.codecName, captureSource))
+            setStatus(.captureActive(capturePreset.description, activeCodecName ?? capturePreset.codecName, captureSource))
         }
 
         let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[CFString: Any]]
@@ -1537,7 +1640,7 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
 
         if isKeyframe,
            let format = CMSampleBufferGetFormatDescription(sampleBuffer),
-           let packet = buildParamSetsPacket(from: format, codecType: capturePreset.codecType) {
+           let packet = buildParamSetsPacket(from: format, codecType: activeCodecType ?? capturePreset.codecType) {
             send(packet)
         }
 

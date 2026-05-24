@@ -3,17 +3,41 @@ import Foundation
 struct TBDiscoveredReceiver: Identifiable, Equatable {
     let serviceName: String
     let receiverName: String
-    let receiverIP: String
+    let preferredIP: String
+    let thunderboltIP: String
+    let networkIP: String
     let panelSummary: String
     let version: String
+    let supportsHEVCDecode: Bool
 
-    var id: String { "\(serviceName)|\(receiverIP)" }
+    var id: String { "\(serviceName)|\(preferredIP)" }
+
+    func ip(for transportKind: TBTransportKind) -> String {
+        switch transportKind {
+        case .thunderboltBridge:
+            return !thunderboltIP.isEmpty ? thunderboltIP : preferredIP
+        case .networkLink:
+            return !networkIP.isEmpty ? networkIP : preferredIP
+        }
+    }
 
     var displayText: String {
-        if panelSummary.isEmpty {
-            return "\(receiverName) · \(receiverIP)"
+        let addressSummary: String
+        switch (thunderboltIP.isEmpty, networkIP.isEmpty) {
+        case (false, false):
+            addressSummary = "TB \(thunderboltIP) · NET \(networkIP)"
+        case (false, true):
+            addressSummary = thunderboltIP
+        case (true, false):
+            addressSummary = networkIP
+        case (true, true):
+            addressSummary = preferredIP
         }
-        return "\(receiverName) · \(receiverIP) · \(panelSummary)"
+
+        if panelSummary.isEmpty {
+            return "\(receiverName) · \(addressSummary)"
+        }
+        return "\(receiverName) · \(addressSummary) · \(panelSummary)"
     }
 }
 
@@ -67,12 +91,16 @@ final class TBReceiverDiscovery: NSObject, ObservableObject {
 
         let receiverName = stringValue("name").isEmpty ? service.name : stringValue("name")
         let receiverIP = stringValue("ip")
-        guard !receiverIP.isEmpty else { return }
+        let thunderboltIP = stringValue("tbIP")
+        let networkIP = stringValue("netIP")
+        let preferredIP = !receiverIP.isEmpty ? receiverIP : (!thunderboltIP.isEmpty ? thunderboltIP : networkIP)
+        guard !preferredIP.isEmpty else { return }
 
         let panelName = stringValue("panel")
         let panelWidth = stringValue("panelWidth")
         let panelHeight = stringValue("panelHeight")
         let version = stringValue("version")
+        let supportsHEVCDecode = stringValue("supportsHEVCDecode") == "1"
 
         let panelSummary: String
         if !panelWidth.isEmpty, !panelHeight.isEmpty, !panelName.isEmpty {
@@ -88,9 +116,12 @@ final class TBReceiverDiscovery: NSObject, ObservableObject {
         let receiver = TBDiscoveredReceiver(
             serviceName: service.name,
             receiverName: receiverName,
-            receiverIP: receiverIP,
+            preferredIP: preferredIP,
+            thunderboltIP: thunderboltIP,
+            networkIP: networkIP,
             panelSummary: panelSummary,
-            version: version
+            version: version,
+            supportsHEVCDecode: supportsHEVCDecode
         )
 
         if let index = receivers.firstIndex(where: { $0.id == receiver.id }) {
@@ -100,7 +131,7 @@ final class TBReceiverDiscovery: NSObject, ObservableObject {
         }
         receivers.sort { lhs, rhs in
             if lhs.receiverName == rhs.receiverName {
-                return lhs.receiverIP < rhs.receiverIP
+                return lhs.preferredIP < rhs.preferredIP
             }
             return lhs.receiverName.localizedCaseInsensitiveCompare(rhs.receiverName) == .orderedAscending
         }

@@ -34,6 +34,7 @@ struct TBMonitorDisplayProfile: Codable {
     var hiDPI: Bool
     var captureWidth: Int
     var captureHeight: Int
+    var supportsHEVCDecode: Bool?
 }
 
 struct TBMonitorCreateSessionAck: Codable {
