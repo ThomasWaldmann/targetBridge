@@ -12,16 +12,27 @@ This first implementation is intentionally conservative:
 This gives us a safe extension point without destabilizing the core display
 pipeline.
 
-Where addon files live
-----------------------
+Official addons
+---------------
 
-User-installed addon manifests are loaded from:
+The current official manifests bundled with the app are:
 
-`~/Library/Application Support/TargetBridge/Addons/User/`
+- `Network Link`
+- `Audio Relay`
+- `Input Dockstation`
 
 Bundled official addon manifests also ship inside the app bundle and are mirrored to:
 
 `~/Library/Application Support/TargetBridge/Addons/Official/`
+
+User-installed addon manifests live separately in:
+
+`~/Library/Application Support/TargetBridge/Addons/User/`
+
+Where addon files live
+----------------------
+
+TargetBridge reads addon manifests from both locations above and merges them into the Add-ons settings UI.
 
 How to add an addon
 -------------------
@@ -73,28 +84,38 @@ Current capability identifiers
 - `audio-relay`
 - `input-dockstation`
 
+Input Dockstation
+-----------------
+
+The `input-dockstation` addon forwards keyboard and mouse input between the currently selected master Mac and one connected slave session at a time.
+
+The current input roles are:
+
+- `Off`
+- `This Mac is Master`
+- `Receiver is Master`
+
+When `This Mac is Master` is active, you can also choose how to switch control between slave sessions:
+
+- keep the master's desktop behavior fully native
+- or use the left/right screen edge and the `Ctrl+Option+Left/Right` hotkeys to move control to the previous/next slave
+
+The current implementation also includes:
+
+- text clipboard sync in the direction of the active master
+- session-scoped remote brightness control
+
+Permissions
+-----------
+
+`Input Dockstation` may require extra macOS permissions depending on the active role:
+
+- on the Sender, accessibility/input-monitoring approval may be needed so TargetBridge can observe keyboard and mouse activity or inject events locally
+- on the Receiver, accessibility/input-monitoring approval may be needed so TargetBridge can observe keyboard and mouse activity or inject events locally
+
 Notes
 -----
 
-- If an addon is incompatible with the installed Sender version, it will still
-  be listed in the UI but marked incompatible.
-- This addon system currently targets the Sender UI and feature gating.
-- The `input-dockstation` addon forwards keyboard and mouse input from the
-  currently selected master Mac to one connected slave session at a time.
-- The current input roles are:
-  - `Off`
-  - `This Mac is Master`
-  - `Receiver is Master`
-- When `This Mac is Master` is active, you can also choose how to switch
-  control between slave sessions:
-  - keep the master's desktop behavior fully native
-  - or use the left/right screen edge and the `Ctrl+Option+Left/Right`
-    hotkeys to move control to the previous/next slave
-- The `input-dockstation` addon requires extra macOS permissions:
-  - on the Sender, accessibility/input-monitoring approval may be needed so
-    TargetBridge can observe keyboard and mouse activity
-  - on the Receiver, accessibility approval may be needed so TargetBridge can
-    inject synthetic keyboard and mouse events
-- The current input relay implementation does not suppress local input on the
-  Sender. Events continue to affect the Sender while also being forwarded to
-  the active Receiver session.
+- If an addon is incompatible with the installed Sender version, it will still be listed in the UI but marked incompatible.
+- This addon system currently targets the Sender UI and feature gating; it does not load arbitrary executable code from addon manifests.
+- The current input relay implementation does not suppress local input on the Sender. Events continue to affect the Sender while also being forwarded to the active remote session.

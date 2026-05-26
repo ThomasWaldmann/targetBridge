@@ -1,6 +1,6 @@
 # Audio Streaming Architecture & Synchronization
 
-TargetBridge implements raw, high-fidelity system audio streaming from a sender Mac to a receiver Mac in **Mirror Mode (Duplicate Desktop)**. The stream is designed for ultra-low latency, real-time synchronization with H.264/HEVC video decoding, and robust scheduling jitter tolerance.
+TargetBridge implements raw, high-fidelity system audio streaming from a sender Mac to a receiver Mac in **Mirror Mode** and **Extended Desktop Mode**. The stream is designed for ultra-low latency, real-time synchronization with H.264/HEVC video decoding, and robust scheduling jitter tolerance.
 
 This document describes the technical architecture, dynamic format conversion pipeline, and the synchronization breakthroughs that eliminated playout lag without sacrificing audio quality.
 
@@ -77,10 +77,10 @@ A 1-second circular buffer (`audio_buf`) is added to the receiver's main `app` c
 ### 3. Smooth-Discard (Sliding-Window Resync)
 Rather than aggressively clearing/wiping the entire audio buffer when it gets backlogged (which causes silent gaps, sudden dropouts, and loud popping noises), we implement a **smooth-discard sliding window**:
 
-* We set a strict maximum latency ceiling of **80ms** (equivalent to `80 * 192 = 15360` bytes).
+* We set a strict maximum latency ceiling of **150ms** (equivalent to `150 * 192 = 28800` bytes).
 * In `on_packet`'s `TB_PKT_AUDIO_FRAME` handler, we check the total queued size:
   ```c
-  const int cap_bytes = 15360; // 80ms
+  const int cap_bytes = 28800; // 150ms
   if (a->audio_buf_size + len > cap_bytes) {
       int excess = (a->audio_buf_size + len) - cap_bytes;
       a->audio_buf_tail = (a->audio_buf_tail + excess) % AUDIO_BUF_CAP;
@@ -88,7 +88,7 @@ Rather than aggressively clearing/wiping the entire audio buffer when it gets ba
   }
   ```
 * **How it works**: If a burst of socket-backlogged packets arrives, the check immediately triggers. Instead of deleting all data, it **advances the read tail pointer by the exact excess byte count**.
-* **The Result**: The oldest, lagging samples are skipped instantly. The circular buffer is left holding exactly **80ms of the newest, most up-to-date audio samples**.
+* **The Result**: The oldest, lagging samples are skipped instantly. The circular buffer is left holding at most **150ms of the newest, most up-to-date audio samples**.
 * **Acoustics**: Truncating just the oldest samples in this manner is perceived by the ear as a seamless micro-skip, maintaining crystal-clear playout fidelity, while guaranteeing that audio latency stays perfectly locked to the video stream.
 
 ---
@@ -101,5 +101,5 @@ Developers can tweak the following properties in `main.c` depending on hardware 
    - Configured at `1024` samples. If run on modern Apple Silicon, this can be safely reduced to `512` (10.6ms) or `256` (5.3ms) for even lower latency.
    - For older Intel Macs or high CPU scheduling jitter, keep this at `1024` to prevent scheduling underflows (which cause crackling/static).
 2. **`cap_bytes` (Latency Threshold)**:
-   - Configured at `15360` bytes (80ms).
-   - If H.264 video decoding takes longer on a specific system, this can be adjusted (e.g., `19200` for 100ms) to match video latency.
+   - Configured at `28800` bytes (150ms).
+   - If H.264/HEVC video decoding takes longer on a specific system, this can be adjusted upward to match real-world video latency, or reduced again on faster hardware.
