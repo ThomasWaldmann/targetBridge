@@ -163,6 +163,10 @@ struct TBDisplaySenderContentView: View {
 
                 Toggle(TBDisplaySenderL10n.largeCursor(service.language), isOn: $service.largeCursor)
                     .disabled(service.anyConnected)
+
+                Toggle(TBDisplaySenderL10n.preventDisplaySleep(service.language), isOn: $service.preventDisplaySleep)
+
+                Toggle(TBDisplaySenderL10n.autoRestartOnWake(service.language), isOn: $service.autoRestartOnWake)
             }
         }
     }
@@ -335,6 +339,12 @@ private struct TBDisplaySenderSessionCard: View {
                 }
                 .buttonStyle(.bordered)
                 .disabled(session.isConnected || session.isStreaming || session.isCableTesting || trimmedReceiverIP.isEmpty || session.localTBIP.isEmpty)
+
+                Button(TBDisplaySenderL10n.restartCaptureButton(service.language)) {
+                    session.restartCaptureNow()
+                }
+                .buttonStyle(.bordered)
+                .disabled(!session.canRestartCapture)
 
                 Button(TBDisplaySenderL10n.removeSessionButton(service.language)) {
                     service.removeSession(session)

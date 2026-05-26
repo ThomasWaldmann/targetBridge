@@ -31,6 +31,30 @@ final class TBDisplaySenderService: ObservableObject {
             objectWillChange.send()
         }
     }
+    @Published var preventDisplaySleep: Bool = {
+        if UserDefaults.standard.object(forKey: "fd.tbdisplaysender.preventDisplaySleep") == nil {
+            return true
+        }
+        return UserDefaults.standard.bool(forKey: "fd.tbdisplaysender.preventDisplaySleep")
+    }() {
+        didSet {
+            UserDefaults.standard.set(preventDisplaySleep, forKey: "fd.tbdisplaysender.preventDisplaySleep")
+            sessions.forEach { $0.preventDisplaySleep = preventDisplaySleep }
+            objectWillChange.send()
+        }
+    }
+    @Published var autoRestartOnWake: Bool = {
+        if UserDefaults.standard.object(forKey: "fd.tbdisplaysender.autoRestartOnWake") == nil {
+            return true
+        }
+        return UserDefaults.standard.bool(forKey: "fd.tbdisplaysender.autoRestartOnWake")
+    }() {
+        didSet {
+            UserDefaults.standard.set(autoRestartOnWake, forKey: "fd.tbdisplaysender.autoRestartOnWake")
+            sessions.forEach { $0.autoRestartOnWake = autoRestartOnWake }
+            objectWillChange.send()
+        }
+    }
 
     private var sessionCancellables: [UUID: AnyCancellable] = [:]
     private let receiverDiscovery = TBReceiverDiscovery()
@@ -70,7 +94,12 @@ final class TBDisplaySenderService: ObservableObject {
     }
 
     func addSession() {
-        let session = TBDisplaySenderSession(language: language, largeCursor: largeCursor)
+        let session = TBDisplaySenderSession(
+            language: language,
+            largeCursor: largeCursor,
+            preventDisplaySleep: preventDisplaySleep,
+            autoRestartOnWake: autoRestartOnWake
+        )
         if let previous = sessions.last {
             session.capturePreset = previous.capturePreset
             session.captureSource = previous.captureSource

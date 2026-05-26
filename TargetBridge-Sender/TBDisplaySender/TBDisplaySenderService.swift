@@ -394,18 +394,33 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
 
     let id = UUID()
 
-    init(language: TBDisplaySenderLanguage, largeCursor: Bool) {
+    init(
+        language: TBDisplaySenderLanguage,
+        largeCursor: Bool,
+        preventDisplaySleep: Bool = true,
+        autoRestartOnWake: Bool = true
+    ) {
         self.statusText = TBDisplaySenderStatusState.ready.text(language)
         self.receiverPanelText = TBDisplaySenderL10n.waitingReceiverProfile(language)
         self.virtualDisplayText = TBDisplaySenderL10n.virtualDisplayNotCreated(language)
         self.language = language
         self.largeCursor = largeCursor
+        self.preventDisplaySleep = preventDisplaySleep
+        self.autoRestartOnWake = autoRestartOnWake
         self.streamResolutionText = TBDisplaySenderL10n.streamSummary(
             preset: .standard1440p,
             source: .desktopMirror,
             language: language
         )
         super.init()
+        registerWakeObservers()
+    }
+
+    deinit {
+        for token in wakeObservers {
+            NSWorkspace.shared.notificationCenter.removeObserver(token)
+            DistributedNotificationCenter.default().removeObserver(token)
+        }
     }
 
     @Published var isConnected = false
@@ -432,6 +447,8 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
         }
     }
     @Published var largeCursor: Bool
+    @Published var preventDisplaySleep: Bool = true
+    @Published var autoRestartOnWake: Bool = true
     @Published var capturePreset: TBDisplayCapturePreset = .standard1440p {
         didSet {
             if !isStreaming {
@@ -477,6 +494,8 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     private var baselineDisplayIDs = Set<CGDirectDisplayID>()
     private var cursorDisplayID: CGDirectDisplayID = kCGNullDirectDisplay
     private var lastCursorPacket: TBMonitorCursor?
+    nonisolated(unsafe) private var wakeObservers: [NSObjectProtocol] = []
+    private var isRestartingCaptureAfterWake = false
 
     private final class CaptureDelegate: NSObject, SCStreamOutput, SCStreamDelegate {
         var onFrame: ((CMSampleBuffer) -> Void)?
@@ -1056,7 +1075,7 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
             isStreaming = true
             if largeCursor { startCursorUpdates(displayID: display.displayID) }
             streamingActivity = ProcessInfo.processInfo.beginActivity(
-                options: [.userInitiated, .idleSystemSleepDisabled],
+                options: activityOptions(),
                 reason: "TargetBridge streaming active"
             )
             startFPSTimer()
@@ -1094,11 +1113,19 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
         isStreaming = true
         if largeCursor { startCursorUpdates(displayID: displayID) }
         streamingActivity = ProcessInfo.processInfo.beginActivity(
-            options: [.userInitiated, .idleSystemSleepDisabled],
+            options: activityOptions(),
             reason: "TargetBridge streaming active"
         )
         startFPSTimer()
         return true
+    }
+
+    private func activityOptions() -> ProcessInfo.ActivityOptions {
+        var options: ProcessInfo.ActivityOptions = [.userInitiated, .idleSystemSleepDisabled]
+        if preventDisplaySleep {
+            options.insert(.idleDisplaySleepDisabled)
+        }
+        return options
     }
 
     private func waitForCaptureDisplay() async throws -> SCDisplay {
@@ -1643,6 +1670,112 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
         lastCursorPacket = cursor
         if let packet = TBMonitorProtocol.makeJSONPacket(type: .cursor, value: cursor) {
             send(packet)
+        }
+    }
+
+    private func registerWakeObservers() {
+        let handler: @Sendable (Notification) -> Void = { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleSystemWake()
+            }
+        }
+
+        wakeObservers.append(
+            NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.screensDidWakeNotification,
+                object: nil,
+                queue: nil,
+                using: handler
+            )
+        )
+        wakeObservers.append(
+            DistributedNotificationCenter.default().addObserver(
+                forName: Notification.Name("com.apple.screenIsUnlocked"),
+                object: nil,
+                queue: nil,
+                using: handler
+            )
+        )
+        wakeObservers.append(
+            DistributedNotificationCenter.default().addObserver(
+                forName: Notification.Name("com.apple.screensaver.didstop"),
+                object: nil,
+                queue: nil,
+                using: handler
+            )
+        )
+    }
+
+    private func handleSystemWake() {
+        guard autoRestartOnWake else { return }
+        scheduleCaptureRestart(reason: "system wake", delaySeconds: 1.0)
+    }
+
+    func restartCaptureNow() {
+        scheduleCaptureRestart(reason: "manual restart", delaySeconds: 0.0)
+    }
+
+    var canRestartCapture: Bool {
+        isStreaming && activeProfile != nil && !isRestartingCaptureAfterWake
+    }
+
+    private func scheduleCaptureRestart(reason: String, delaySeconds: Double) {
+        guard isStreaming, !isRestartingCaptureAfterWake, let profile = activeProfile else { return }
+        isRestartingCaptureAfterWake = true
+        NSLog("TargetBridge: \(reason) — soft restart of capture pipeline")
+        Task { @MainActor [weak self] in
+            if delaySeconds > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
+            }
+            guard let self else { return }
+            guard self.isStreaming, self.activeProfile?.receiverName == profile.receiverName else {
+                self.isRestartingCaptureAfterWake = false
+                return
+            }
+            await self.softRestartCapture(for: profile)
+            self.isRestartingCaptureAfterWake = false
+        }
+    }
+
+    private func softRestartCapture(for profile: TBMonitorDisplayProfile) async {
+        // Tear down only the capture pipeline — keep the network connection and virtual display.
+        cursorTimer?.invalidate()
+        cursorTimer = nil
+        fpsTimer?.invalidate()
+        fpsTimer = nil
+        if let directDisplayStream {
+            directDisplayStream.stop()
+            self.directDisplayStream = nil
+        }
+        if let stream = scStream {
+            if let delegate = captureDelegate {
+                try? stream.removeStreamOutput(delegate, type: .screen)
+            }
+            stream.stopCapture(completionHandler: nil)
+            scStream = nil
+        }
+        captureDelegate = nil
+        if let activity = streamingActivity {
+            ProcessInfo.processInfo.endActivity(activity)
+            streamingActivity = nil
+        }
+        if let encoder = vtEncoder { VTCompressionSessionInvalidate(encoder) }
+        vtEncoder = nil
+        vtEncoderRef?.release()
+        vtEncoderRef = nil
+        isStreaming = false
+        displayStreamFrameSequence = 0
+        senderFPS = 0
+        sentSnapshot = sentFrames
+        pendingVideoPackets = 0
+        inFlightEncodeFrames = 0
+        cursorDisplayID = kCGNullDirectDisplay
+        lastCursorPacket = nil
+
+        let started = await startCapture(for: profile)
+        if !started {
+            NSLog("TargetBridge: soft restart after wake failed — falling back to full stop")
+            stop(resetStatusTo: .captureError("capture restart after wake failed"))
         }
     }
 
