@@ -588,6 +588,7 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     private var heartbeatTimer: Timer?
     private var firstFrameTimer: Timer?
     private var cursorTimer: Timer?
+    private var connectTimeoutWorkItem: DispatchWorkItem?
     private var heartbeatSequence: UInt64 = 0
     private var statusState: TBDisplaySenderStatusState = .ready
     private var streamingActivity: NSObjectProtocol?
@@ -764,6 +765,8 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
 
     func connect() {
         guard connection == nil, !receiverIP.isEmpty, !localInterfaceIP.isEmpty else { return }
+        connectTimeoutWorkItem?.cancel()
+        connectTimeoutWorkItem = nil
         recvBuffer.removeAll(keepingCapacity: false)
         activeProfile = nil
         activeCodecType = nil
@@ -790,6 +793,8 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
                 guard let self else { return }
                 switch state {
                 case .ready:
+                    self.connectTimeoutWorkItem?.cancel()
+                    self.connectTimeoutWorkItem = nil
                     self.isConnected = true
                     self.setStatus(.waitingDisplayProfile)
                     self.startHeartbeat()
@@ -808,6 +813,7 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
             }
         }
 
+        startConnectWatchdog()
         conn.start(queue: connectionQueue)
     }
 
@@ -942,6 +948,8 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
             persistExtendedDisplayArrangementIfNeeded()
         }
         sendTeardown(reason: "sender_stop")
+        connectTimeoutWorkItem?.cancel()
+        connectTimeoutWorkItem = nil
         heartbeatTimer?.invalidate()
         heartbeatTimer = nil
         firstFrameTimer?.invalidate()
@@ -1188,6 +1196,27 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
         CGEvent(source: nil)?.location
     }
 
+    private func screenFrame(containing point: CGPoint) -> CGRect? {
+        NSScreen.screens.first(where: { $0.frame.contains(point) })?.frame
+    }
+
+    private func clampedMouseTarget(from current: CGPoint, dx: Int, dy: Int) -> CGPoint {
+        let rawTarget = CGPoint(x: current.x + CGFloat(dx), y: current.y + CGFloat(dy))
+        guard let frame = screenFrame(containing: current) ?? NSScreen.screens.first?.frame else {
+            return rawTarget
+        }
+
+        let minX = frame.minX
+        let maxX = frame.maxX - 1
+        let minY = frame.minY
+        let maxY = frame.maxY - 1
+
+        return CGPoint(
+            x: min(max(rawTarget.x, minX), maxX),
+            y: min(max(rawTarget.y, minY), maxY)
+        )
+    }
+
     private func localInputEventSource() -> CGEventSource? {
         let source = CGEventSource(stateID: .hidSystemState)
         source?.localEventsSuppressionInterval = 0
@@ -1202,7 +1231,7 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     private func postLocalMouseMove(dx: Int, dy: Int, type: CGEventType = .mouseMoved, button: CGMouseButton = .left) {
         logLocalInputInjectionStateIfNeeded(context: "mouseMove")
         guard let current = currentLocalMouseLocation() else { return }
-        let target = CGPoint(x: current.x + CGFloat(dx), y: current.y + CGFloat(dy))
+        let target = clampedMouseTarget(from: current, dx: dx, dy: dy)
         let shouldWarp = (type == .mouseMoved)
         if shouldWarp {
             CGWarpMouseCursorPosition(target)
@@ -1211,6 +1240,19 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
         event.setIntegerValueField(.mouseEventDeltaX, value: Int64(dx))
         event.setIntegerValueField(.mouseEventDeltaY, value: Int64(dy))
         event.post(tap: .cghidEventTap)
+
+        // Auto-hidden menu bar / Dock reveal on macOS depends on the pointer
+        // really landing on a screen edge. A second edge-pinned move helps the
+        // system treat relayed motion like a native "push against the border".
+        if type == .mouseMoved,
+           let frame = screenFrame(containing: target),
+           target.x <= frame.minX || target.x >= frame.maxX - 1 ||
+           target.y <= frame.minY || target.y >= frame.maxY - 1,
+           let edgeEvent = CGEvent(mouseEventSource: localInputEventSource(), mouseType: .mouseMoved, mouseCursorPosition: target, mouseButton: button) {
+            edgeEvent.setIntegerValueField(.mouseEventDeltaX, value: Int64(dx))
+            edgeEvent.setIntegerValueField(.mouseEventDeltaY, value: Int64(dy))
+            edgeEvent.post(tap: .cghidEventTap)
+        }
     }
 
     private func postLocalMouseButton(type: CGEventType, button: CGMouseButton) {
@@ -2303,6 +2345,31 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
                 stop(resetStatusTo: nil)
             }
         }
+    }
+
+    private func startConnectWatchdog() {
+        connectTimeoutWorkItem?.cancel()
+        
+        let workItem = DispatchWorkItem { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard !self.isConnected else { return }
+
+                let timeoutMessage: String
+                switch self.language {
+                case .italian: timeoutMessage = "Connessione scaduta"
+                case .english: timeoutMessage = "Connection timed out"
+                case .german: timeoutMessage = "Verbindungs-Zeitüberschreitung"
+                case .chinese: timeoutMessage = "连接超时"
+                }
+
+                self.setStatus(.connectionFailed(timeoutMessage))
+                self.stop(resetStatusTo: nil)
+            }
+        }
+        
+        connectTimeoutWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0, execute: workItem)
     }
 
     private func processAudio(_ sampleBuffer: CMSampleBuffer) {
