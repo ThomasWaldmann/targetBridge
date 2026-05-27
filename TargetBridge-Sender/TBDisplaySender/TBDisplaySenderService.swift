@@ -556,6 +556,7 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     private var heartbeatTimer: Timer?
     private var firstFrameTimer: Timer?
     private var cursorTimer: Timer?
+    private var connectTimeoutWorkItem: DispatchWorkItem?
     private var heartbeatSequence: UInt64 = 0
     private var statusState: TBDisplaySenderStatusState = .ready
     private var streamingActivity: NSObjectProtocol?
@@ -732,6 +733,8 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
 
     func connect() {
         guard connection == nil, !receiverIP.isEmpty, !localInterfaceIP.isEmpty else { return }
+        connectTimeoutWorkItem?.cancel()
+        connectTimeoutWorkItem = nil
         recvBuffer.removeAll(keepingCapacity: false)
         activeProfile = nil
         activeCodecType = nil
@@ -758,6 +761,8 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
                 guard let self else { return }
                 switch state {
                 case .ready:
+                    self.connectTimeoutWorkItem?.cancel()
+                    self.connectTimeoutWorkItem = nil
                     self.isConnected = true
                     self.setStatus(.waitingDisplayProfile)
                     self.startHeartbeat()
@@ -776,6 +781,7 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
             }
         }
 
+        startConnectWatchdog()
         conn.start(queue: connectionQueue)
     }
 
@@ -910,6 +916,8 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
             persistExtendedDisplayArrangementIfNeeded()
         }
         sendTeardown(reason: "sender_stop")
+        connectTimeoutWorkItem?.cancel()
+        connectTimeoutWorkItem = nil
         heartbeatTimer?.invalidate()
         heartbeatTimer = nil
         firstFrameTimer?.invalidate()
@@ -2305,6 +2313,31 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
                 stop(resetStatusTo: nil)
             }
         }
+    }
+
+    private func startConnectWatchdog() {
+        connectTimeoutWorkItem?.cancel()
+        
+        let workItem = DispatchWorkItem { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard !self.isConnected else { return }
+
+                let timeoutMessage: String
+                switch self.language {
+                case .italian: timeoutMessage = "Connessione scaduta"
+                case .english: timeoutMessage = "Connection timed out"
+                case .german: timeoutMessage = "Verbindungs-Zeitüberschreitung"
+                case .chinese: timeoutMessage = "连接超时"
+                }
+
+                self.setStatus(.connectionFailed(timeoutMessage))
+                self.stop(resetStatusTo: nil)
+            }
+        }
+        
+        connectTimeoutWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0, execute: workItem)
     }
 
     private func processAudio(_ sampleBuffer: CMSampleBuffer) {
