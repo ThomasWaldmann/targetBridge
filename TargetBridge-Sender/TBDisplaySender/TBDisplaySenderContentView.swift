@@ -370,7 +370,9 @@ private struct TBDisplaySenderSessionCard: View {
                     infoRow(TBDisplaySenderL10n.receiverLabel(service.language), session.receiverPanelText)
                     infoRow(TBDisplaySenderL10n.virtualDisplayLabel(service.language), session.virtualDisplayText)
                     infoRow(TBDisplaySenderL10n.streamLabel(service.language), session.streamResolutionText)
-                    infoRow(TBDisplaySenderL10n.fpsLabel(service.language), "\(session.senderFPS)")
+                    // Observes the dedicated metrics object so the ~1 Hz FPS tick
+                    // re-renders only this row, not the whole session card / window.
+                    SessionMonitorFPSRow(label: TBDisplaySenderL10n.fpsLabel(service.language), metrics: session.liveMetrics)
                     infoRow("Capture", session.captureDisplayText)
                     infoRow("State", session.displayStateText)
                 }
@@ -515,6 +517,26 @@ private struct TBDisplaySenderSessionCard: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 138, alignment: .leading)
             Text(value)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// FPS readout that observes only `TBSessionLiveMetrics`. Isolating it here means
+/// the once-per-second FPS update invalidates just this small row instead of the
+/// entire session card (and, via the manager bubble-up, the whole window).
+private struct SessionMonitorFPSRow: View {
+    let label: String
+    @ObservedObject var metrics: TBSessionLiveMetrics
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 14) {
+            Text(label)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 138, alignment: .leading)
+            Text("\(metrics.senderFPS)")
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
