@@ -560,7 +560,7 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     }
     @Published var inputControlRole: TBInputControlRole = .off {
         didSet {
-            inputRelayActive = (inputControlRole == .senderMaster)
+            inputRelayActive = (inputControlRole != .off)
         }
     }
     @Published var inputGestureMode: TBInputGestureMode = .native

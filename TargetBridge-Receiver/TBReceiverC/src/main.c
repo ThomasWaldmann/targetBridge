@@ -1222,7 +1222,23 @@ static CGEventRef tb_receiver_input_tap_callback(CGEventTapProxy proxy,
         int point_sx = (int)CGEventGetIntegerValueField(event, kCGScrollWheelEventPointDeltaAxis2);
         int point_sy = (int)CGEventGetIntegerValueField(event, kCGScrollWheelEventPointDeltaAxis1);
         int is_continuous = (int)CGEventGetIntegerValueField(event, kCGScrollWheelEventIsContinuous);
+        CGEventFlags flags = CGEventGetFlags(event);
+        const CGEventFlags effective_flags = flags & ~kCGEventFlagMaskSecondaryFn;
         uint64_t now = now_ms();
+        if ((effective_flags & kCGEventFlagMaskAlternate) &&
+            (llabs((long long)point_sx) > llabs((long long)point_sy) * 2 || llabs((long long)sx) > llabs((long long)sy) * 2) &&
+            now - a->last_space_switch_ms > 300) {
+            int direction = 0;
+            if (point_sx != 0) direction = point_sx > 0 ? 1 : -1;
+            else if (sx != 0) direction = sx > 0 ? 1 : -1;
+            if (direction != 0) {
+                a->last_space_switch_ms = now;
+                a->space_gesture_accum_x = 0;
+                tb_receiver_send_space_switch(a, direction);
+                should_consume = a->input_tap_consumes_events;
+                break;
+            }
+        }
         if (is_continuous &&
             (point_sx != 0 || point_sy != 0) &&
             llabs((long long)point_sx) > llabs((long long)point_sy) * 2) {
@@ -1301,6 +1317,7 @@ static CGEventRef tb_receiver_input_tap_callback(CGEventTapProxy proxy,
         int key_down = 0;
         int handled = 1;
         CGEventFlags flags = CGEventGetFlags(event);
+        should_consume = a->input_tap_consumes_events;
         switch (key_code) {
         case 54: case 55: key_down = (flags & kCGEventFlagMaskCommand) != 0; break;
         case 56: case 60: key_down = (flags & kCGEventFlagMaskShift) != 0; break;
@@ -1312,7 +1329,6 @@ static CGEventRef tb_receiver_input_tap_callback(CGEventTapProxy proxy,
              * it to the sender. Letting it pass through locally can trigger emoji,
              * dictation, or other system overlays when combined with normal keys. */
             handled = 0;
-            should_consume = a->input_tap_consumes_events;
             break;
         default:
             handled = 0;
@@ -1320,7 +1336,6 @@ static CGEventRef tb_receiver_input_tap_callback(CGEventTapProxy proxy,
         }
         if (handled) {
             tb_receiver_send_input_event(a, key_down ? "keyDown" : "keyUp", 0, 0, 0, 0, 0, 0, 0, 0, 1, key_code);
-            should_consume = a->input_tap_consumes_events;
         }
         break;
     }

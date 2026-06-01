@@ -1078,6 +1078,17 @@ unsigned int tb_disp_poll_actions(struct tb_display *d) {
             case SDL_MOUSEWHEEL:
             {
                 uint32_t now = SDL_GetTicks();
+                SDL_Keymod mods = SDL_GetModState();
+                if ((mods & KMOD_ALT) &&
+                    abs(ev.wheel.x) > abs(ev.wheel.y) &&
+                    ev.wheel.x != 0 &&
+                    now - d->last_space_switch_tick > 300) {
+                    input_event.kind = ev.wheel.x > 0 ? TB_INPUT_EVENT_SWITCH_NEXT_SPACE : TB_INPUT_EVENT_SWITCH_PREV_SPACE;
+                    tb_disp_queue_input_event(d, &input_event);
+                    d->last_space_switch_tick = now;
+                    d->space_gesture_accum_x = 0;
+                    break;
+                }
                 if (abs(ev.wheel.x) > abs(ev.wheel.y) * 2 && ev.wheel.x != 0) {
                     if (now - d->last_space_gesture_tick > 250) {
                         d->space_gesture_accum_x = 0;
