@@ -6,6 +6,9 @@ static tb_gesture_space_switch_callback g_callback = NULL;
 static void *g_context = NULL;
 static id g_swipe_monitor = nil;
 static id g_scroll_monitor = nil;
+static id g_key_down_monitor = nil;
+static id g_key_up_monitor = nil;
+static id g_flags_monitor = nil;
 static BOOL g_active = NO;
 static NSTimeInterval g_last_horizontal_gesture_at = 0.0;
 static CGFloat g_horizontal_accumulator = 0.0;
@@ -25,7 +28,7 @@ void tb_gesture_bridge_install(tb_gesture_space_switch_callback callback, void *
     g_callback = callback;
     g_context = context;
 
-    if (g_swipe_monitor || g_scroll_monitor) {
+    if (g_swipe_monitor || g_scroll_monitor || g_key_down_monitor || g_key_up_monitor || g_flags_monitor) {
         return;
     }
 
@@ -57,6 +60,24 @@ void tb_gesture_bridge_install(tb_gesture_space_switch_callback callback, void *
             g_last_switch_at = now;
             g_horizontal_accumulator = 0.0;
         }
+        return nil;
+    }];
+
+    g_key_down_monitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+                                                               handler:^NSEvent * _Nullable(NSEvent * _Nonnull event) {
+        if (!g_active) return event;
+        return nil;
+    }];
+
+    g_key_up_monitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyUp
+                                                             handler:^NSEvent * _Nullable(NSEvent * _Nonnull event) {
+        if (!g_active) return event;
+        return nil;
+    }];
+
+    g_flags_monitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskFlagsChanged
+                                                            handler:^NSEvent * _Nullable(NSEvent * _Nonnull event) {
+        if (!g_active) return event;
         return nil;
     }];
 }
