@@ -87,6 +87,7 @@ struct app {
     uint64_t input_events_sent;
     uint64_t input_events_received;
     uint64_t last_target_switch_ms;
+    uint64_t last_space_switch_ms;
     uint64_t last_clipboard_poll_ms;
     char     last_clipboard_text[4096];
 };
@@ -1121,6 +1122,18 @@ static void tb_receiver_send_target_switch(struct app *a, int direction) {
                                  0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }
 
+static void tb_receiver_send_space_switch(struct app *a, int direction) {
+    tb_receiver_send_input_event(a,
+                                 direction < 0 ? "switchPrevSpace" : "switchNextSpace",
+                                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+}
+
+static void tb_receiver_send_deactivate_control(struct app *a) {
+    tb_receiver_send_input_event(a,
+                                 "deactivateInputControl",
+                                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+}
+
 static CGEventRef tb_receiver_input_tap_callback(CGEventTapProxy proxy,
                                                  CGEventType type,
                                                  CGEventRef event,
@@ -1197,6 +1210,15 @@ static CGEventRef tb_receiver_input_tap_callback(CGEventTapProxy proxy,
     case kCGEventScrollWheel: {
         int sx = (int)CGEventGetIntegerValueField(event, kCGScrollWheelEventDeltaAxis2);
         int sy = (int)CGEventGetIntegerValueField(event, kCGScrollWheelEventDeltaAxis1);
+        uint64_t now = now_ms();
+        if (llabs((long long)sx) >= 3 &&
+            llabs((long long)sx) > llabs((long long)sy) * 2 &&
+            now - a->last_space_switch_ms > 450) {
+            a->last_space_switch_ms = now;
+            tb_receiver_send_space_switch(a, sx > 0 ? 1 : -1);
+            should_consume = a->input_tap_consumes_events;
+            break;
+        }
         tb_receiver_send_input_event(a, "scroll", 0, 0, 0, 0, 1, sx, 1, sy, 0, 0);
         should_consume = a->input_tap_consumes_events;
         break;
@@ -1204,7 +1226,16 @@ static CGEventRef tb_receiver_input_tap_callback(CGEventTapProxy proxy,
     case kCGEventKeyDown: {
         uint16_t key_code = (uint16_t)CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode);
         CGEventFlags flags = CGEventGetFlags(event);
-        if ((flags & kCGEventFlagMaskControl) && (flags & kCGEventFlagMaskAlternate)) {
+        const CGEventFlags effective_flags = flags & ~kCGEventFlagMaskSecondaryFn;
+        if ((flags & kCGEventFlagMaskControl) &&
+            (flags & kCGEventFlagMaskAlternate) &&
+            (flags & kCGEventFlagMaskCommand) &&
+            key_code == 40) {
+            tb_receiver_send_deactivate_control(a);
+            should_consume = a->input_tap_consumes_events;
+            break;
+        }
+        if ((effective_flags & kCGEventFlagMaskControl) && (effective_flags & kCGEventFlagMaskAlternate)) {
             if (key_code == 123) {
                 tb_receiver_send_target_switch(a, -1);
                 should_consume = a->input_tap_consumes_events;
@@ -1224,7 +1255,15 @@ static CGEventRef tb_receiver_input_tap_callback(CGEventTapProxy proxy,
     {
         uint16_t key_code = (uint16_t)CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode);
         CGEventFlags flags = CGEventGetFlags(event);
-        if ((flags & kCGEventFlagMaskControl) && (flags & kCGEventFlagMaskAlternate) &&
+        const CGEventFlags effective_flags = flags & ~kCGEventFlagMaskSecondaryFn;
+        if ((flags & kCGEventFlagMaskControl) &&
+            (flags & kCGEventFlagMaskAlternate) &&
+            (flags & kCGEventFlagMaskCommand) &&
+            key_code == 40) {
+            should_consume = a->input_tap_consumes_events;
+            break;
+        }
+        if ((effective_flags & kCGEventFlagMaskControl) && (effective_flags & kCGEventFlagMaskAlternate) &&
             (key_code == 123 || key_code == 124)) {
             should_consume = a->input_tap_consumes_events;
             break;
@@ -1691,6 +1730,15 @@ int main(int argc, char **argv) {
                     break;
                 case TB_INPUT_EVENT_SWITCH_NEXT_TARGET:
                     tb_receiver_send_target_switch(&a, 1);
+                    break;
+                case TB_INPUT_EVENT_SWITCH_PREV_SPACE:
+                    tb_receiver_send_space_switch(&a, -1);
+                    break;
+                case TB_INPUT_EVENT_SWITCH_NEXT_SPACE:
+                    tb_receiver_send_space_switch(&a, 1);
+                    break;
+                case TB_INPUT_EVENT_DEACTIVATE_CONTROL:
+                    tb_receiver_send_deactivate_control(&a);
                     break;
                 case TB_INPUT_EVENT_NONE:
                 default:

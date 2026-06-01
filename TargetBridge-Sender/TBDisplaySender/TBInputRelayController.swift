@@ -5,23 +5,32 @@ import Foundation
 final class TBInputRelayController {
     typealias Handler = (TBMonitorInputEvent) -> Void
     typealias SwitchHandler = (_ direction: Int) -> Void
+    typealias DeactivateHandler = () -> Void
+
+    private static let escapeChordKeyCode: UInt16 = 40 // kVK_ANSI_K
+    private static let keepAwakeReason = "TargetBridge Input Dockstation active"
 
     private var localMonitors: [Any] = []
     private var globalMonitors: [Any] = []
     private var handler: Handler?
     private var switchHandler: SwitchHandler?
+    private var deactivateHandler: DeactivateHandler?
     private var gestureMode: TBInputGestureMode = .native
     private var lastEdgeSwitchTime: TimeInterval = 0
+    private var activityToken: NSObjectProtocol?
 
     func start(
         gestureMode: TBInputGestureMode,
         handler: @escaping Handler,
-        switchHandler: @escaping SwitchHandler
+        switchHandler: @escaping SwitchHandler,
+        deactivateHandler: @escaping DeactivateHandler
     ) {
         stop()
         self.gestureMode = gestureMode
         self.handler = handler
         self.switchHandler = switchHandler
+        self.deactivateHandler = deactivateHandler
+        beginKeepAwakeActivity()
 
         installKeyboardMonitors()
         installMouseMonitors()
@@ -37,20 +46,35 @@ final class TBInputRelayController {
         }
         localMonitors.removeAll()
         globalMonitors.removeAll()
+        endKeepAwakeActivity()
         handler = nil
         switchHandler = nil
+        deactivateHandler = nil
     }
 
     private func installKeyboardMonitors() {
         let mask: NSEvent.EventTypeMask = [.keyDown, .keyUp, .flagsChanged]
 
         let global = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] event in
-            self?.handle(event)
+            guard let self else { return }
+            if self.shouldDeactivateFromEscapeChord(event) {
+                self.deactivateHandler?()
+                return
+            }
+            self.handle(event)
         }
         if let global { globalMonitors.append(global) }
 
         let local = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
-            self?.handle(event)
+            guard let self else { return event }
+            if self.shouldDeactivateFromEscapeChord(event) {
+                self.deactivateHandler?()
+                return nil
+            }
+            if self.shouldConsumeSwitchHotkey(event) {
+                return nil
+            }
+            self.handle(event)
             return event
         }
         if let local { localMonitors.append(local) }
@@ -235,6 +259,21 @@ final class TBInputRelayController {
         Int(event.keyCode) == 123 || Int(event.keyCode) == 124
     }
 
+    private func shouldConsumeSwitchHotkey(_ event: NSEvent) -> Bool {
+        gestureMode == .relayToSlave && (shouldSwitchSlaveFromHotkey(event) || isHandledHotkeyRelease(event))
+    }
+
+    private func shouldDeactivateFromEscapeChord(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.keyCode == Self.escapeChordKeyCode
+        else {
+            return false
+        }
+
+        let flags = event.modifierFlags.intersection([.control, .option, .command])
+        return flags.contains(.control) && flags.contains(.option) && flags.contains(.command)
+    }
+
     private func modifierIsDown(for event: NSEvent) -> Bool {
         switch Int(event.keyCode) {
         case 54, 55:
@@ -252,5 +291,18 @@ final class TBInputRelayController {
         default:
             return false
         }
+    }
+
+    private func beginKeepAwakeActivity() {
+        activityToken = ProcessInfo.processInfo.beginActivity(
+            options: [.idleDisplaySleepDisabled, .idleSystemSleepDisabled, .userInitiatedAllowingIdleSystemSleep],
+            reason: Self.keepAwakeReason
+        )
+    }
+
+    private func endKeepAwakeActivity() {
+        guard let activityToken else { return }
+        ProcessInfo.processInfo.endActivity(activityToken)
+        self.activityToken = nil
     }
 }

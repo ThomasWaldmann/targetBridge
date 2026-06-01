@@ -310,6 +310,10 @@ final class TBDisplaySenderService: ObservableObject {
             guard let self, let session else { return }
             self.switchReceiverMasterTarget(from: session, direction: direction)
         }
+        session.onRemoteDeactivateInputRequest = { [weak self, weak session] in
+            guard let self, let session else { return }
+            self.setInputControlRole(.off, for: session)
+        }
         sessionCancellables[session.id] = session.objectWillChange.sink { [weak self] _ in
             self?.updateInputRelayController()
             self?.objectWillChange.send()
@@ -413,13 +417,17 @@ final class TBDisplaySenderService: ObservableObject {
         inputRelayController.start(
             gestureMode: session.inputGestureMode,
             handler: { [weak self] relayEvent in
-            guard let self,
-                  session.isConnected
-            else { return }
-            session.sendInputEvent(relayEvent)
-        },
+                guard let self,
+                      session.isConnected
+                else { return }
+                session.sendInputEvent(relayEvent)
+            },
             switchHandler: { [weak self] direction in
                 self?.switchSenderMasterTarget(direction: direction)
+            },
+            deactivateHandler: { [weak self, weak session] in
+                guard let self, let session else { return }
+                self.setInputControlRole(.off, for: session)
             }
         )
     }

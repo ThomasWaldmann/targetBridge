@@ -603,6 +603,7 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     private static var cachedSupportsHEVCHardwareEncode: Bool?
     private var receivedInputEventCount: UInt64 = 0
     var onRemoteSwitchRequest: ((Int) -> Void)?
+    var onRemoteDeactivateInputRequest: (() -> Void)?
     nonisolated(unsafe) private var wakeObservers: [NSObjectProtocol] = []
     private var isRestartingCaptureAfterWake = false
 
@@ -1170,6 +1171,12 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
                         onRemoteSwitchRequest?(-1)
                     } else if event.kind == "switchNextTarget" {
                         onRemoteSwitchRequest?(1)
+                    } else if event.kind == "switchPrevSpace" {
+                        postLocalSpaceSwitch(direction: -1)
+                    } else if event.kind == "switchNextSpace" {
+                        postLocalSpaceSwitch(direction: 1)
+                    } else if event.kind == "deactivateInputControl" {
+                        onRemoteDeactivateInputRequest?()
                     } else {
                         applyIncomingInputEvent(event)
                     }
@@ -1279,6 +1286,31 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
         logLocalInputInjectionStateIfNeeded(context: "key")
         guard let event = CGEvent(keyboardEventSource: localInputEventSource(), virtualKey: CGKeyCode(keyCode), keyDown: isDown) else { return }
         event.post(tap: .cghidEventTap)
+    }
+
+    private func postLocalSpaceSwitch(direction: Int) {
+        logLocalInputInjectionStateIfNeeded(context: "spaceSwitch")
+
+        let controlKeyCode: UInt16 = 59
+        let arrowKeyCode: UInt16 = direction < 0 ? 123 : 124
+
+        guard let controlDown = CGEvent(keyboardEventSource: localInputEventSource(), virtualKey: CGKeyCode(controlKeyCode), keyDown: true),
+              let arrowDown = CGEvent(keyboardEventSource: localInputEventSource(), virtualKey: CGKeyCode(arrowKeyCode), keyDown: true),
+              let arrowUp = CGEvent(keyboardEventSource: localInputEventSource(), virtualKey: CGKeyCode(arrowKeyCode), keyDown: false),
+              let controlUp = CGEvent(keyboardEventSource: localInputEventSource(), virtualKey: CGKeyCode(controlKeyCode), keyDown: false)
+        else {
+            return
+        }
+
+        controlDown.flags = .maskControl
+        arrowDown.flags = .maskControl
+        arrowUp.flags = .maskControl
+        controlUp.flags = []
+
+        controlDown.post(tap: .cghidEventTap)
+        arrowDown.post(tap: .cghidEventTap)
+        arrowUp.post(tap: .cghidEventTap)
+        controlUp.post(tap: .cghidEventTap)
     }
 
     private func applyIncomingInputEvent(_ event: TBMonitorInputEvent) {

@@ -42,6 +42,7 @@ struct tb_display {
     int           input_head;
     int           input_tail;
     uint32_t      last_target_switch_tick;
+    uint32_t      last_space_switch_tick;
     int           cursor_x, cursor_y;
     int           cursor_source_w, cursor_source_h;
     int           cursor_visible;
@@ -1073,6 +1074,14 @@ unsigned int tb_disp_poll_actions(struct tb_display *d) {
                 tb_disp_queue_input_event(d, &input_event);
                 break;
             case SDL_MOUSEWHEEL:
+                if (abs(ev.wheel.x) >= 3 &&
+                    abs(ev.wheel.x) > abs(ev.wheel.y) * 2 &&
+                    SDL_GetTicks() - d->last_space_switch_tick > 450) {
+                    input_event.kind = ev.wheel.x > 0 ? TB_INPUT_EVENT_SWITCH_NEXT_SPACE : TB_INPUT_EVENT_SWITCH_PREV_SPACE;
+                    tb_disp_queue_input_event(d, &input_event);
+                    d->last_space_switch_tick = SDL_GetTicks();
+                    break;
+                }
                 input_event.kind = TB_INPUT_EVENT_SCROLL;
                 input_event.scroll_x = ev.wheel.x;
                 input_event.scroll_y = ev.wheel.y;
@@ -1092,6 +1101,14 @@ unsigned int tb_disp_poll_actions(struct tb_display *d) {
                 break;
             case SDL_KEYDOWN:
                 if (!ev.key.repeat) {
+                    if ((ev.key.keysym.mod & KMOD_CTRL) &&
+                        (ev.key.keysym.mod & KMOD_ALT) &&
+                        (ev.key.keysym.mod & KMOD_GUI) &&
+                        ev.key.keysym.sym == SDLK_k) {
+                        input_event.kind = TB_INPUT_EVENT_DEACTIVATE_CONTROL;
+                        tb_disp_queue_input_event(d, &input_event);
+                        break;
+                    }
                     if ((ev.key.keysym.mod & KMOD_CTRL) && (ev.key.keysym.mod & KMOD_ALT)) {
                         if (ev.key.keysym.sym == SDLK_LEFT) {
                             input_event.kind = TB_INPUT_EVENT_SWITCH_PREV_TARGET;
@@ -1113,6 +1130,12 @@ unsigned int tb_disp_poll_actions(struct tb_display *d) {
                 break;
             case SDL_KEYUP:
                 {
+                if ((ev.key.keysym.mod & KMOD_CTRL) &&
+                    (ev.key.keysym.mod & KMOD_ALT) &&
+                    (ev.key.keysym.mod & KMOD_GUI) &&
+                    ev.key.keysym.sym == SDLK_k) {
+                    break;
+                }
                 if ((ev.key.keysym.mod & KMOD_CTRL) && (ev.key.keysym.mod & KMOD_ALT) &&
                     (ev.key.keysym.sym == SDLK_LEFT || ev.key.keysym.sym == SDLK_RIGHT)) {
                     break;
