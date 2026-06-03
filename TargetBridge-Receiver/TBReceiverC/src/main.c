@@ -1366,9 +1366,6 @@ static CGEventRef tb_receiver_input_tap_callback(CGEventTapProxy proxy,
         break;
     }
     case kCGEventFlagsChanged: {
-        uint16_t key_code = (uint16_t)CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode);
-        int key_down = 0;
-        int handled = 1;
         CGEventFlags flags = CGEventGetFlags(event);
         const CGEventFlags effective_flags = flags & ~kCGEventFlagMaskSecondaryFn;
         should_consume = a->input_tap_consumes_events;
@@ -1378,25 +1375,6 @@ static CGEventRef tb_receiver_input_tap_callback(CGEventTapProxy proxy,
                                         (effective_flags & kCGEventFlagMaskAlternate) != 0,
                                         (effective_flags & kCGEventFlagMaskControl) != 0,
                                         (effective_flags & kCGEventFlagMaskAlphaShift) != 0);
-        switch (key_code) {
-        case 54: case 55: key_down = (flags & kCGEventFlagMaskCommand) != 0; break;
-        case 56: case 60: key_down = (flags & kCGEventFlagMaskShift) != 0; break;
-        case 58: case 61: key_down = (flags & kCGEventFlagMaskAlternate) != 0; break;
-        case 59: case 62: key_down = (flags & kCGEventFlagMaskControl) != 0; break;
-        case 57: key_down = (flags & kCGEventFlagMaskAlphaShift) != 0; break;
-        case 63:
-            /* Swallow fn/globe locally while receiver is master, but never forward
-             * it to the sender. Letting it pass through locally can trigger emoji,
-             * dictation, or other system overlays when combined with normal keys. */
-            handled = 0;
-            break;
-        default:
-            handled = 0;
-            break;
-        }
-        if (handled) {
-            tb_receiver_send_input_event(a, key_down ? "keyDown" : "keyUp", 0, 0, 0, 0, 0, 0, 0, 0, 1, key_code);
-        }
         break;
     }
     default:
