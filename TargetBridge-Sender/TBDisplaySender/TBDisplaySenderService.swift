@@ -896,7 +896,7 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
             sendBrightnessUpdate()
         }
     }
-    @Published var volume: Double = 1.0 {
+    @Published var volume: Double = 0.5 {
         didSet {
             sendVolumeUpdate()
         }
