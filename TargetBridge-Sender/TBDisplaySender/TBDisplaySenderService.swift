@@ -1850,6 +1850,13 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
             )
             self.displayStateText = self.describeDisplayState(for: self.session.displayID)
 
+            // Reset the first-frame flag BEFORE capture starts. startCapture() is
+            // async and frames can begin flowing (firing handleFirstEncodedFrame,
+            // which sets sessionAckSent = true) during its suspension. Resetting
+            // afterward would clobber that true back to false, leaving the watchdog
+            // armed against a session that has already delivered frames — it then
+            // tears down a healthy stream ~4s in. See onFirstFrame wiring below.
+            self.sessionAckSent = false
             self.setStatus(.startingCapture(self.capturePreset.description, self.captureSource))
             let started = await self.startCapture(for: profile)
             guard started else {
@@ -1863,7 +1870,6 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
                 self.scheduleDesktopMirrorRecovery(for: self.session.displayID)
             }
 
-            self.sessionAckSent = false
             self.setStatus(.captureStartedWaitingFirstFrame)
             self.startFirstFrameWatchdog()
         }
@@ -2650,6 +2656,10 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     }
 
     private func startFirstFrameWatchdog() {
+        // If the first encoded frame already arrived (handleFirstEncodedFrame ran
+        // while startCapture was still suspended), there is nothing to watch for —
+        // arming would only leave a no-op timer dangling for 4s.
+        guard !sessionAckSent else { return }
         firstFrameTimer?.invalidate()
         firstFrameTimer = Timer.scheduledTimer(withTimeInterval: 4, repeats: false) { [weak self] _ in
             guard let self else { return }
